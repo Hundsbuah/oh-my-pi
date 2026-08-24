@@ -204,6 +204,21 @@ export function parseArrayOrCSV(value: unknown): string[] | undefined {
 	return undefined;
 }
 
+/**
+ * Like {@link parseArrayOrCSV} but preserves an explicitly empty value as `[]`.
+ * Used for fields where `[]` ("present but empty") is distinct from absent.
+ * A CSV string yields `[]` only when every entry is blank or the string is empty.
+ */
+export function parseArrayOrCSVKeepEmpty(value: unknown): string[] | undefined {
+	if (Array.isArray(value)) {
+		return value.filter((item): item is string => typeof item === "string");
+	}
+	if (typeof value === "string") {
+		return parseCSV(value);
+	}
+	return undefined;
+}
+
 interface RuleMarkdownOptions {
 	ruleName?: string;
 	stripNamePattern?: RegExp;
@@ -294,6 +309,12 @@ export interface ParsedAgentFields {
 	output?: unknown;
 	thinkingLevel?: ConfiguredThinkingLevel;
 	autoloadSkills?: string[];
+	/** Skill-name globs listed in the child's `<skills>` block. Absent = unrestricted; `[]`/`"none"` = none listed. */
+	skills?: string[];
+	/** Skill-name globs excluded from the child's `<skills>` block. Takes precedence over `skills` and `unhideSkills`. */
+	hideSkills?: string[];
+	/** Skill-name globs whose source `hide: true` is overridden for the child's `<skills>` block. */
+	unhideSkills?: string[];
 	readSummarize?: boolean;
 	blocking?: boolean;
 	/** `true` = prewalk into the default target; string = prewalk into that model pattern. */
@@ -380,6 +401,16 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	const autoloadSkills = parseArrayOrCSV(frontmatter.autoloadSkills)
 		?.map(s => s.trim())
 		.filter(Boolean);
+	// `skills: "none"` is sugar for an empty allowlist (`[]`): zero skills listed.
+	// An absent field stays `undefined` (unrestricted, all skills listed as today).
+	const rawSkills = frontmatter.skills === "none" ? [] : parseArrayOrCSVKeepEmpty(frontmatter.skills);
+	const skills = rawSkills?.map(s => s.trim()).filter(Boolean);
+	const hideSkills = parseArrayOrCSV(frontmatter.hideSkills)
+		?.map(s => s.trim())
+		.filter(Boolean);
+	const unhideSkills = parseArrayOrCSV(frontmatter.unhideSkills)
+		?.map(s => s.trim())
+		.filter(Boolean);
 	return {
 		name,
 		description,
@@ -390,6 +421,9 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		thinkingLevel,
 		blocking,
 		autoloadSkills,
+		skills,
+		hideSkills,
+		unhideSkills,
 		readSummarize,
 		prewalk,
 		advisor,
