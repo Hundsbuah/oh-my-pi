@@ -5,6 +5,9 @@
 ### Added
 
 - Added per-role skill visibility control for subagents via agent frontmatter: `skills` (allowlist globs; `"none"`/`[]` lists none), `hideSkills` (denylist globs, highest precedence), and `unhideSkills` (re-exposes skills whose `SKILL.md` sets `hide: true`) — see [#4570](https://github.com/can1357/oh-my-pi/issues/4570). Controls the rendered `<skills>` block only; hidden skills remain loadable via `skill://<name>` and `/skill:<name>`.
+### Fixed
+
+- TTSR stream buffers now reset at every assistant message boundary, not only at turn start, so a `scope: text` or tool-argument rule can no longer fire on a later message because of text streamed by an earlier response in the same turn ([#11957](https://github.com/can1357/oh-my-pi/pull/11957) by [@srobroek](https://github.com/srobroek)).
 
 ### Changed
 
@@ -23,6 +26,7 @@
 ### Fixed
 
 - Fixed background task cards missing their final completion or failure after an early result or live-session focus replay.
+- Ranged reads on Windows no longer intermittently open the selector-suffixed path when filesystem probes return transient errors ([#11284](https://github.com/can1357/oh-my-pi/issues/11284)).
 
 ## [18.1.19] - 2026-09-12
 
