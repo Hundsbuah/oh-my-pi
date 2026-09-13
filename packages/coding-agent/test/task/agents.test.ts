@@ -28,7 +28,6 @@ describe("resolveAgentSkills", () => {
 		const resolved = resolveAgentSkills(skills, agent());
 		expect(resolved).toHaveLength(3);
 		expect(listed(resolved)).toEqual(["alpha", "beta", "gamma"]);
-		expect(resolved[0]).toBe(skills[0]);
 	});
 
 	test("allowlist narrows the listing to matching names", () => {
@@ -78,18 +77,23 @@ describe("resolveAgentSkills", () => {
 		expect(resolved.map(s => s.hide)).toEqual([true, true]);
 	});
 
-	test("does not copy skills that need no change", () => {
-		const skills = [skill("alpha"), skill("beta", true)];
-		const resolved = resolveAgentSkills(skills, agent({ hideSkills: ["none"] }));
-		expect(resolved[0]).toBe(skills[0]);
-		expect(resolved[1]).toBe(skills[1]);
+	test("does not mutate the input list, which is shared with the parent session", () => {
+		// The resolved list is handed to one child, but the input is the parent
+		// session's own skill list (the global active snapshot for a main
+		// session). Marking visibility by writing `hide` in place would leak one
+		// agent's filter into every later spawn and into `skill://` resolution.
+		const skills = [skill("alpha"), skill("beta", true), skill("gamma")];
+		const before = skills.map(s => ({ ...s }));
+
+		resolveAgentSkills(skills, agent({ skills: ["alpha"], hideSkills: ["gamma"] }));
+
+		expect(skills).toEqual(before);
 	});
 
 	test("malformed glob does not throw and does not match", () => {
 		const skills = [skill("alpha")];
 		const resolved = resolveAgentSkills(skills, agent({ hideSkills: ["[invalid"] }));
 		expect(listed(resolved)).toEqual(["alpha"]);
-		expect(resolved[0]).toBe(skills[0]);
 	});
 });
 
