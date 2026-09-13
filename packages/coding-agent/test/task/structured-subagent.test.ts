@@ -455,6 +455,30 @@ describe("structured subagent primitive", () => {
 		expect(dispatched[0]?.skills?.filter(s => s.hide !== true).map(s => s.name)).toEqual(["alpha", "secret"]);
 	});
 
+	it("preloads an autoloadSkills entry that visibility hides from the listing", async () => {
+		// `autoloadSkills` exists to inject a skill's content up front, so it must
+		// resolve against the full list: resolving against the visibility-filtered
+		// list would silently stop preloading a skill the agent explicitly asked
+		// for, which is the one case where hiding it from the listing is expected.
+		const skills = [
+			{ name: "alpha", description: "a", filePath: "/skills/alpha/SKILL.md", baseDir: "/skills", source: "user" },
+			{ name: "secret", description: "s", filePath: "/skills/secret/SKILL.md", baseDir: "/skills", source: "user" },
+		];
+		mockDiscovery({ ...AGENT, skills: ["alpha"], autoloadSkills: ["secret"] });
+		const childSession = session();
+		childSession.skills = skills;
+		const dispatched: executorModule.ExecutorOptions[] = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			dispatched.push(options);
+			return result();
+		});
+
+		await runStructuredSubagent(request({ session: childSession, retainArtifacts: true }));
+
+		expect(dispatched[0]?.skills?.filter(s => s.hide !== true).map(s => s.name)).toEqual(["alpha"]);
+		expect(dispatched[0]?.autoloadSkills?.map(s => s.name)).toEqual(["secret"]);
+	});
+
 	it("retains temporary artifacts when the run failed but yielded schema-valid structured output", async () => {
 		// Regression: a task can produce schema-valid data and then fail (or
 		// exceed its runtime limit). The async notice still advertises the
