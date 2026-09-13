@@ -215,6 +215,22 @@ describe("parseAgentFields", () => {
 		expect(fields?.skills).toBeUndefined();
 	});
 
+	test("treats a blank skills value as absent rather than an empty allowlist", () => {
+		// Only `[]` and the `"none"` sentinel mean "list nothing". A blank value
+		// is malformed and must fall back to the absent default (unrestricted);
+		// reading it as an empty allowlist would hide every skill because the
+		// user left a field blank.
+		for (const blank of ["", "   ", ["", "  "]]) {
+			expect(parseAgentFields({ name: "worker", description: "desc", skills: blank })?.skills).toBeUndefined();
+		}
+		// A CSV that pairs the sentinel with a real name is a name list, not the
+		// sentinel: only an exact `"none"` lists nothing.
+		expect(parseAgentFields({ name: "worker", description: "desc", skills: "none, git-*" })?.skills).toEqual([
+			"none",
+			"git-*",
+		]);
+	});
+
 	test("parses hideSkills and unhideSkills from frontmatter", () => {
 		const fields = parseAgentFields({
 			name: "worker",
