@@ -36,6 +36,10 @@
 - `stream()` and `streamSimple()` support asynchronous model header resolution for each request attempt, including authentication retries and cancellation.
 - Provider login prompts can request masked entry with `secret: true`.
 
+### Fixed
+
+- Fixed OpenAI Responses chain recovery on local hosts (e.g. NInfer): a `404 response_not_found` rejection of `previous_response_id` now degrades to a full-context replay retry within the same request instead of failing the turn or the compaction handoff.
+
 ## [18.2.2] - 2026-09-16
 
 ### Added
