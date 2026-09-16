@@ -460,7 +460,14 @@ function buildOpenAIResponsesChainedParams(
 
 function isOpenAIResponsesStalePreviousResponseError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
-	if ((error as { code?: string }).code === "previous_response_not_found") return true;
+	const { code } = error as { code?: string };
+	if (code === "previous_response_not_found") return true;
+	// Local Responses hosts (NInfer) answer an unresolvable
+	// `previous_response_id` with 404 code `response_not_found` and a message
+	// ("response '<id>' not found") that lacks the "previous response" phrasing
+	// the message check below keys on. Without recognition the chained request
+	// hard-fails instead of degrading to the full-replay retry.
+	if (code === "response_not_found") return true;
 	// "unsupported" covers endpoints that reject the parameter outright
 	// (e.g. "Unsupported parameter: previous_response_id").
 	return (
