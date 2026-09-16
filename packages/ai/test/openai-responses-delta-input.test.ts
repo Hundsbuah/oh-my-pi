@@ -200,4 +200,59 @@ describe("buildResponsesDeltaInput streaming-symbol scrub", () => {
 			buildResponsesDeltaInput(previous, [previousAssistant], { input: [user, wrongPhaseAssistant, appended] }),
 		).toBeNull();
 	});
+
+	it("optionally treats an omitted input_image detail as the Responses API default auto", () => {
+		const imageUrl = "data:image/png;base64,ZmFrZQ==";
+		const previousImage = {
+			type: "message",
+			role: "user",
+			content: [{ type: "input_image", detail: "auto", image_url: imageUrl }],
+		} as ResponseInputItem;
+		const replayedImage = {
+			type: "message",
+			role: "user",
+			content: [{ type: "input_image", image_url: imageUrl }],
+		} as ResponseInputItem;
+		const appended = {
+			type: "message",
+			role: "user",
+			content: [{ type: "input_text", text: "generate handoff" }],
+		} as ResponseInputItem;
+
+		const previous = { input: [previousImage] };
+		const current = { input: [replayedImage, appended] };
+
+		// Normal stateful turns remain byte/shape strict.
+		expect(buildResponsesDeltaInput(previous, [], current)).toBeNull();
+		// Isolated handoff forks may accept only the API-defined default spelling.
+		expect(
+			buildResponsesDeltaInput(previous, [], current, undefined, {
+				allowEquivalentInputImages: true,
+			}),
+		).toEqual([appended]);
+	});
+
+	it("does not treat different image content as equivalent in an isolated replay", () => {
+		const previousImage = {
+			type: "message",
+			role: "user",
+			content: [{ type: "input_image", detail: "auto", image_url: "data:image/png;base64,QUFB" }],
+		} as ResponseInputItem;
+		const changedImage = {
+			type: "message",
+			role: "user",
+			content: [{ type: "input_image", image_url: "data:image/png;base64,QkJC" }],
+		} as ResponseInputItem;
+		const appended = {
+			type: "message",
+			role: "user",
+			content: [{ type: "input_text", text: "generate handoff" }],
+		} as ResponseInputItem;
+
+		expect(
+			buildResponsesDeltaInput({ input: [previousImage] }, [], { input: [changedImage, appended] }, undefined, {
+				allowEquivalentInputImages: true,
+			}),
+		).toBeNull();
+	});
 });
