@@ -124,7 +124,7 @@ static MAX_CACHE_ENTRIES: LazyLock<usize> =
 	LazyLock::new(|| env_uint("FS_SCAN_CACHE_MAX_ENTRIES", 16, 0, usize::MAX));
 static MAX_CACHE_BYTES: LazyLock<usize> =
 	LazyLock::new(|| env_uint("FS_SCAN_CACHE_MAX_BYTES", 64 * 1024 * 1024, 0, usize::MAX));
-const DEFAULT_WALK_WORKERS: usize = 4;
+const DEFAULT_WALK_WORKERS: usize = 32;
 
 static WALK_WORKERS: LazyLock<usize> = LazyLock::new(|| {
 	normalize_worker_count(env_uint("PI_WALK_WORKERS", DEFAULT_WALK_WORKERS, 0, usize::MAX))
