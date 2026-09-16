@@ -261,6 +261,89 @@ function getOpenAIResponsesProviderSessionState(
 	return created;
 }
 
+/**
+ * Fork one appendable Responses conversation into isolated provider state.
+ *
+ * The target gets fresh mutable maps/state and a remapped conversation key, so
+ * a side request may reuse the parent's `previous_response_id` baseline without
+ * letting retries, stale-id recovery, strict-tool fallback, effort fallback, or
+ * successful chain advancement mutate the live session's client-side state.
+ *
+ * This does not weaken the normal append gate. `buildResponsesDeltaInput()`
+ * still compares the freshly-built target request against the copied wire
+ * baseline and falls back to a full replay if history or request options differ.
+ *
+ * @internal Used by cache-preserving isolated side requests such as handoff.
+ */
+export function forkOpenAIResponsesProviderSessionState(
+	model: Pick<Model, "provider" | "id">,
+	sourceProviderSessionState: Map<string, ProviderSessionState> | undefined,
+	sourceSessionId: string | undefined,
+	targetSessionId: string,
+): Map<string, ProviderSessionState> | undefined {
+	if (!sourceProviderSessionState || !sourceSessionId) return undefined;
+
+	// Chain keys use the normalized Responses routing id, not the caller's raw
+	// session string. Normalize both sides exactly as the normal request path does.
+	const sourceRoutingSessionId = getOpenAIResponsesRoutingSessionId({ sessionId: sourceSessionId });
+	const targetRoutingSessionId = getOpenAIResponsesRoutingSessionId({ sessionId: targetSessionId });
+	if (!sourceRoutingSessionId || !targetRoutingSessionId || sourceRoutingSessionId === targetRoutingSessionId) {
+		return undefined;
+	}
+
+	const providerKey = `${OPENAI_RESPONSES_PROVIDER_SESSION_STATE_PREFIX}${model.provider}`;
+	const sourceProviderState = sourceProviderSessionState.get(providerKey) as
+		| OpenAIResponsesProviderSessionState
+		| undefined;
+	if (!sourceProviderState) return undefined;
+
+	const sourceSuffix = `\u0000${model.id}\u0000${sourceRoutingSessionId}`;
+	const chainCopies: Array<[string, OpenAIResponsesChainState]> = [];
+	for (const [sourceKey, sourceChain] of sourceProviderState.chains) {
+		if (!sourceKey.endsWith(sourceSuffix)) continue;
+		if (
+			!sourceChain.canAppend ||
+			sourceChain.disabled ||
+			!sourceChain.lastParams ||
+			!sourceChain.lastResponseId ||
+			sourceChain.lastResponseItems === undefined
+		) {
+			continue;
+		}
+		const targetKey = `${sourceKey.slice(0, sourceKey.length - sourceRoutingSessionId.length)}${targetRoutingSessionId}`;
+		chainCopies.push([
+			targetKey,
+			{
+				lastParams: structuredCloneJSON(sourceChain.lastParams),
+				lastPromptCacheBreakpointPolicy: sourceChain.lastPromptCacheBreakpointPolicy,
+				lastResponseId: sourceChain.lastResponseId,
+				lastResponseItems: structuredCloneJSON(sourceChain.lastResponseItems),
+				canAppend: true,
+				staleFailures: sourceChain.staleFailures,
+				disabled: false,
+			},
+		]);
+	}
+	if (chainCopies.length === 0) return undefined;
+
+	const targetProviderState = createOpenAIResponsesProviderSessionState();
+	targetProviderState.nativeHistoryReplayWarmed = sourceProviderState.nativeHistoryReplayWarmed;
+	targetProviderState.strictTools.disabledModelScopes = new Set(sourceProviderState.strictTools.disabledModelScopes);
+	targetProviderState.reasoningEffortFallbacks = new Map(sourceProviderState.reasoningEffortFallbacks);
+
+	// `configuration_update` effort state is conversation-keyed and mutable.
+	// Copy only this model/session and remap its session suffix; never share the
+	// transition array with the live request path.
+	for (const [sourceKey, sourceEffortState] of sourceProviderState.effortControls) {
+		if (!sourceKey.endsWith(sourceSuffix)) continue;
+		const targetKey = `${sourceKey.slice(0, sourceKey.length - sourceRoutingSessionId.length)}${targetRoutingSessionId}`;
+		targetProviderState.effortControls.set(targetKey, structuredCloneJSON(sourceEffortState));
+	}
+	for (const [targetKey, chain] of chainCopies) targetProviderState.chains.set(targetKey, chain);
+
+	return new Map<string, ProviderSessionState>([[providerKey, targetProviderState]]);
+}
+
 function isOpenAIResponsesStatefulEnabled(
 	options: OpenAIResponsesOptions | undefined,
 	model: Model<"openai-responses">,
