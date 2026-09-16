@@ -54,6 +54,7 @@ packages/ai/test/.temp-images/
 compaction-results/
 changes/
 __pycache__/
+graphify-out/
 
 # Scratch files
 syntax.jsonl
