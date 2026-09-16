@@ -72,6 +72,8 @@ python/omp-rpc/build/
 .wt/
 CPU*.md
 packages/coding-agent/binaries/
+*PROMPT.md
+*.patch
 
 # robomp runtime state
 python/robomp/data/
