@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import {
+	forkOpenAIResponsesProviderSessionState,
+	streamOpenAIResponses,
+} from "@oh-my-pi/pi-ai/providers/openai-responses";
 import type { Context, FetchImpl, Model, ModelSpec, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
@@ -226,6 +229,135 @@ describe("openai-responses stateful chaining", () => {
 			}),
 		);
 		expect(replay).not.toContainEqual(expect.objectContaining({ role: "assistant", phase: "final_answer" }));
+	});
+
+	it("forks a parent baseline for a disposable side request without advancing the parent", async () => {
+		const sentRequests: Array<Record<string, unknown>> = [];
+		const fetchMock = createCapturingFetch(sentRequests);
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const parentSessionId = "stateful-fork-parent";
+		const parentOptions = {
+			apiKey: "test-key",
+			sessionId: parentSessionId,
+			promptCacheKey: parentSessionId,
+			providerSessionState,
+			statefulResponses: true,
+			reasoning: "low" as const,
+			fetch: fetchMock,
+		};
+		const firstUser = { role: "user" as const, content: "First question", timestamp: 1000 };
+		const firstResponse = await streamOpenAIResponses(
+			model,
+			{ systemPrompt, messages: [firstUser] },
+			parentOptions,
+		).result();
+
+		const sideSessionId = `${parentSessionId}:side:handoff:1`;
+		const sideProviderSessionState = forkOpenAIResponsesProviderSessionState(
+			model,
+			providerSessionState,
+			parentSessionId,
+			sideSessionId,
+		);
+		if (!sideProviderSessionState) throw new Error("Expected an isolated Responses state fork");
+
+		const sideUser = { role: "user" as const, content: "Generate side document", timestamp: 1001 };
+		await streamOpenAIResponses(
+			model,
+			{ systemPrompt, messages: [firstUser, firstResponse, sideUser] },
+			{
+				...parentOptions,
+				sessionId: sideSessionId,
+				providerSessionState: sideProviderSessionState,
+				// Match the handoff transport: append planning sees the copied
+				// store:true baseline, then the final wire request becomes disposable.
+				onPayload: payload =>
+					typeof payload === "object" && payload !== null && !Array.isArray(payload)
+						? { ...(payload as Record<string, unknown>), store: false }
+						: payload,
+			},
+		).result();
+
+		const secondMainUser = { role: "user" as const, content: "Second main question", timestamp: 1002 };
+		await streamOpenAIResponses(
+			model,
+			{ systemPrompt, messages: [firstUser, firstResponse, secondMainUser] },
+			parentOptions,
+		).result();
+
+		expect(sentRequests).toHaveLength(3);
+		expect(sentRequests[0]?.previous_response_id).toBeUndefined();
+		expect(sentRequests[0]?.store).toBe(true);
+		expect(sentRequests[1]?.previous_response_id).toBe("resp_1");
+		expect(sentRequests[1]?.store).toBe(false);
+		expect(sentRequests[2]?.previous_response_id).toBe("resp_1");
+		expect(sentRequests[2]?.store).toBe(true);
+		expect(JSON.stringify(sentRequests[1]?.input)).toContain("Generate side document");
+		expect(JSON.stringify(sentRequests[1]?.input)).not.toContain("First question");
+		expect(JSON.stringify(sentRequests[2]?.input)).toContain("Second main question");
+		expect(JSON.stringify(sentRequests[2]?.input)).not.toContain("Generate side document");
+
+		for (const state of sideProviderSessionState.values()) state.close();
+		sideProviderSessionState.clear();
+	});
+
+	it("keeps the strict append gate when a forked side request changes wire options", async () => {
+		const sentRequests: Array<Record<string, unknown>> = [];
+		const fetchMock = createCapturingFetch(sentRequests);
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const parentSessionId = "stateful-fork-option-parent";
+		const parentOptions = {
+			apiKey: "test-key",
+			sessionId: parentSessionId,
+			promptCacheKey: parentSessionId,
+			providerSessionState,
+			statefulResponses: true,
+			fetch: fetchMock,
+		};
+		const firstUser = { role: "user" as const, content: "First question", timestamp: 1000 };
+		const firstResponse = await streamOpenAIResponses(
+			model,
+			{ systemPrompt, messages: [firstUser] },
+			parentOptions,
+		).result();
+
+		const sideSessionId = `${parentSessionId}:side:handoff:2`;
+		const sideProviderSessionState = forkOpenAIResponsesProviderSessionState(
+			model,
+			providerSessionState,
+			parentSessionId,
+			sideSessionId,
+		);
+		if (!sideProviderSessionState) throw new Error("Expected an isolated Responses state fork");
+
+		const sideUser = { role: "user" as const, content: "Different options", timestamp: 1001 };
+		await streamOpenAIResponses(
+			model,
+			{ systemPrompt, messages: [firstUser, firstResponse, sideUser] },
+			{
+				...parentOptions,
+				sessionId: sideSessionId,
+				providerSessionState: sideProviderSessionState,
+				promptCacheKey: "different-cache-key",
+			},
+		).result();
+
+		const secondMainUser = { role: "user" as const, content: "Parent still chains", timestamp: 1002 };
+		await streamOpenAIResponses(
+			model,
+			{ systemPrompt, messages: [firstUser, firstResponse, secondMainUser] },
+			parentOptions,
+		).result();
+
+		expect(sentRequests).toHaveLength(3);
+		// The fork is an optimization only. A wire-option mismatch must retain the
+		// existing safe full-replay path rather than forcing a stale parent id.
+		expect(sentRequests[1]?.previous_response_id).toBeUndefined();
+		expect(JSON.stringify(sentRequests[1]?.input)).toContain("First question");
+		expect(sentRequests[2]?.previous_response_id).toBe("resp_1");
+
+		for (const state of sideProviderSessionState.values()) state.close();
+		sideProviderSessionState.clear();
 	});
 
 	it("keeps the automatic explicit cache breakpoint stable across chained turns", async () => {
