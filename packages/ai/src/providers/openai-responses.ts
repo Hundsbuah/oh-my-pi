@@ -221,6 +221,13 @@ interface OpenAIResponsesChainState {
 	lastResponseId?: string;
 	/** Output items of the last response, in replay-sanitized form (matches next-turn input). */
 	lastResponseItems?: ResponseInput;
+	/**
+	 * Isolated side-request forks may rebuild historical input images from the
+	 * generic message view. The Responses API treats an omitted image detail as
+	 * `auto`, so allow only that semantic normalization while retaining strict
+	 * equality for every other history field.
+	 */
+	allowEquivalentInputImages?: boolean;
 	canAppend: boolean;
 	/** Consecutive stale-previous-response failures; reset on a successful chained completion. */
 	staleFailures: number;
@@ -318,6 +325,7 @@ export function forkOpenAIResponsesProviderSessionState(
 				lastPromptCacheBreakpointPolicy: sourceChain.lastPromptCacheBreakpointPolicy,
 				lastResponseId: sourceChain.lastResponseId,
 				lastResponseItems: structuredCloneJSON(sourceChain.lastResponseItems),
+				allowEquivalentInputImages: true,
 				canAppend: true,
 				staleFailures: sourceChain.staleFailures,
 				disabled: false,
@@ -429,7 +437,9 @@ function buildOpenAIResponsesChainedParams(
 			? { ...params, input: params.input.slice(0, params.input.length - trailingScaffoldingItems) }
 			: params;
 	const deltaInput = chain.canAppend
-		? buildResponsesDeltaInput(chain.lastParams, chain.lastResponseItems, historyParams)
+		? buildResponsesDeltaInput(chain.lastParams, chain.lastResponseItems, historyParams, undefined, {
+				allowEquivalentInputImages: chain.allowEquivalentInputImages === true,
+			})
 		: null;
 	if (deltaInput && deltaInput.length > 0 && chain.lastResponseId) {
 		const scaffolding =
