@@ -765,6 +765,64 @@ describe("openai-responses stateful chaining", () => {
 		expect(JSON.stringify(sentRequests[2]?.input)).toContain("First question");
 		expect(JSON.stringify(sentRequests[2]?.input)).toContain("Second question");
 	});
+
+	it("retries a NInfer-style response_not_found 404 with the full transcript", async () => {
+		// NInfer reports an unresolvable previous_response_id with code
+		// `response_not_found` and a message that never says "previous response";
+		// without recognition the chained request hard-fails instead of
+		// degrading to the full-replay retry.
+		const sentRequests: Array<Record<string, unknown>> = [];
+		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+			const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			sentRequests.push(request);
+			if (typeof request.previous_response_id === "string") {
+				return new Response(
+					JSON.stringify({
+						error: {
+							message: `response '${request.previous_response_id}' not found`,
+							type: "invalid_request_error",
+							param: "previous_response_id",
+							code: "response_not_found",
+						},
+					}),
+					{ status: 404, headers: { "content-type": "application/json" } },
+				);
+			}
+			return createStatefulSse(`Answer ${sentRequests.length}`, `resp_${sentRequests.length}`);
+		}) as FetchImpl;
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const options = {
+			apiKey: "test-key",
+			sessionId: "stateful-ninfer-stale-session",
+			providerSessionState,
+			statefulResponses: true,
+			reasoning: "low" as const,
+			fetch: fetchMock,
+		};
+
+		const firstUser = { role: "user" as const, content: "First question", timestamp: 1000 };
+		const firstResponse = await streamOpenAIResponses(
+			model,
+			{ systemPrompt, messages: [firstUser] },
+			options,
+		).result();
+		const secondResponse = await streamOpenAIResponses(
+			model,
+			{
+				systemPrompt,
+				messages: [firstUser, firstResponse, { role: "user", content: "Second question", timestamp: 1001 }],
+			},
+			options,
+		).result();
+
+		expect(secondResponse.stopReason).toBe("stop");
+		expect(JSON.stringify(secondResponse.content)).toContain("Answer 3");
+		expect(sentRequests).toHaveLength(3);
+		expect(sentRequests[1]?.previous_response_id).toBe("resp_1");
+		expect(sentRequests[2]?.previous_response_id).toBeUndefined();
+		expect(JSON.stringify(sentRequests[2]?.input)).toContain("First question");
+		expect(JSON.stringify(sentRequests[2]?.input)).toContain("Second question");
+	});
 	it("retries a blocked invalid_prompt previous_response_id with the full transcript", async () => {
 		const sentRequests: Array<Record<string, unknown>> = [];
 		const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
