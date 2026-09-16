@@ -175,12 +175,10 @@ export class SessionHandoff {
 					apiKey: this.#host.modelRegistry.resolver(model, cacheSessionId),
 					sessionId: handoffSessionId,
 					promptCacheKey: handoffPromptCacheKey,
-					// Stateful Responses chaining compares request options before
-					// accepting previous_response_id. NInfer live turns use the
-					// model/default output budget, so a handoff-only 24,576-token
-					// override would break the append gate even when history is
-					// byte-identical. Keep the cap for other providers only.
-					...(isNInferResponses ? {} : { maxTokens: 24_576 }),
+					// No handoff-only maxTokens: the NInfer Responses append gate
+					// compares the side request against the live turn's wire
+					// baseline, so a divergent handoff output budget would break
+					// chaining. All providers keep the model's default budget.
 					...(isNInferResponses
 						? {
 								// A fork is useful only when stateful request shaping is actually
