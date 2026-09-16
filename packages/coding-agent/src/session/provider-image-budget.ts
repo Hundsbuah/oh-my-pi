@@ -230,6 +230,9 @@ function clampImages(context: Context, state: ImageBudgetState): Context {
  */
 export function clampProviderContextImages(context: Context, model: Model): Context {
 	if (!model.input.includes("image")) return context;
+	// NInfer/Infernix enforce the vision budget server-side (media_budget_exceeded);
+	// client-side eviction would drop images the request could have carried.
+	if (model.provider === "ninfer") return context;
 	const metadataWire = sendsComputerScreenshotMetadata(model);
 	const totalImages = countImages(context, metadataWire);
 	const remainingDrops = totalImages - providerImageBudget(model);
