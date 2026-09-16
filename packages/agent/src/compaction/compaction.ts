@@ -1067,10 +1067,17 @@ export interface HandoffFromContextOptions {
 	 * session's payload/response hooks. Sending the same routing + payload shape
 	 * the main loop uses is what lets the handoff oneshot READ the provider
 	 * prompt cache the live turn populated instead of cold-missing the whole
-	 * prefix. `reasoning` and `toolChoice` are set internally and override
+	 * prefix. `reasoning` and `toolChoice` are normally set internally and override
 	 * anything provided here.
 	 */
 	streamOptions: SimpleStreamOptions;
+	/**
+	 * @internal Explicit opt-in for the SessionHandoff NInfer Responses fast path.
+	 * When enabled for NInfer Responses, omit `toolChoice` so the wire request
+	 * stays compatible with the live `auto` prompt. Other callers keep the
+	 * historical `toolChoice: "none"` contract.
+	 */
+	cachePreservingNInferResponses?: boolean;
 	/** Optional completion transport override for host-level request wrappers. */
 	completeImpl?: <TApi extends Api>(
 		model: Model<TApi>,
@@ -1091,9 +1098,13 @@ export interface HandoffFromContextOptions {
  * trailing handoff-prompt message already appended — and supplies
  * `streamOptions` that mirror the live turn's cache routing. That keeps the
  * cache-preserving context construction in the host (which owns the transform
- * pipeline) while this function centralizes the handoff request contract:
- * cache-first `toolChoice: "none"`, clamped reasoning effort, one retry for
- * auto-only `tool_choice` providers, oneshot telemetry, text-only extraction,
+ * pipeline) while this function centralizes the handoff request contract.
+ * By default it preserves the historical `toolChoice: "none"` behavior.
+ * Only the explicit SessionHandoff NInfer Responses opt-in omits the field so
+ * NInfer's default `auto` path can retain live prompt/cache identity; if the
+ * model emits a tool call, one no-tools safety retry is used. The function
+ * also keeps the auto-only-provider retry, clamped reasoning effort,
+ * oneshot telemetry, text-only extraction,
  * and provider-error mapping.
  */
 export async function generateHandoffFromContext(
@@ -1101,10 +1112,16 @@ export async function generateHandoffFromContext(
 	model: Model,
 	options: HandoffFromContextOptions,
 ): Promise<string> {
+	const cachePreservingNInferHandoff =
+		options.cachePreservingNInferResponses === true &&
+		model.provider === "ninfer" &&
+		model.api === "openai-responses";
 	const requestOptions = {
 		...options.streamOptions,
 		reasoning: resolveCompactionEffort(model, options.thinkingLevel),
-		toolChoice: "none" as const,
+		// `undefined` intentionally removes any caller override only on the
+		// explicitly opted-in NInfer path; NInfer then defaults to `auto`.
+		toolChoice: cachePreservingNInferHandoff ? undefined : ("none" as const),
 	};
 	let response = await instrumentedCompleteSimple(model, context, requestOptions, {
 		telemetry: options.telemetry,
@@ -1112,11 +1129,37 @@ export async function generateHandoffFromContext(
 		completeImpl: options.completeImpl,
 		retry: {},
 	});
-	if (response.stopReason === "error" && shouldRetryHandoffWithAutoToolChoice(response)) {
+	if (
+		!cachePreservingNInferHandoff &&
+		response.stopReason === "error" &&
+		shouldRetryHandoffWithAutoToolChoice(response)
+	) {
 		response = await instrumentedCompleteSimple(
 			model,
 			context,
 			{ ...requestOptions, toolChoice: "auto" },
+			{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl, retry: {} },
+		);
+	}
+
+	// Handoff never executes returned tool calls. If the explicitly opted-in
+	// NInfer request nevertheless chooses one in auto mode, retry once with the
+	// historical no-tools contract. Do not retry an aborted request: cancellation
+	// must remain terminal and must not start another inference.
+	//
+	// Disable stateful chaining on this rare retry: the fast path is sent with
+	// `store:false`, so its response id is intentionally not a valid next
+	// `previous_response_id` baseline.
+	if (
+		cachePreservingNInferHandoff &&
+		response.stopReason !== "error" &&
+		response.stopReason !== "aborted" &&
+		response.content.some(content => content.type === "toolCall")
+	) {
+		response = await instrumentedCompleteSimple(
+			model,
+			context,
+			{ ...requestOptions, toolChoice: "none", statefulResponses: false },
 			{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl, retry: {} },
 		);
 	}

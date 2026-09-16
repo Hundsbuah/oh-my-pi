@@ -64,6 +64,10 @@ function getTestModel(): Model {
 	return model;
 }
 
+function getNInferResponsesTestModel(): Model {
+	return { ...getTestModel(), provider: "ninfer", api: "openai-responses" } as Model;
+}
+
 afterEach(() => {
 	vi.restoreAllMocks();
 });
@@ -203,6 +207,138 @@ describe("handoff helpers", () => {
 			toolChoice: "none",
 			reasoning: Effort.Medium,
 		});
+	});
+
+	test("generateHandoffFromContext omits NInfer Responses tool_choice only with explicit cache opt-in", async () => {
+		const completeSimpleSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "## Goal\nCached handoff" }]));
+		const model = getNInferResponsesTestModel();
+		const context = {
+			systemPrompt: ["Live system prompt"],
+			tools: [createHandoffTool()],
+			messages: [{ role: "user" as const, content: "prepare handoff", timestamp: 1 }],
+		};
+
+		const document = await generateHandoffFromContext(context, model, {
+			streamOptions: {
+				apiKey: "test-key",
+				sessionId: "ninfer-main:side:1",
+				promptCacheKey: "ninfer-main",
+				// Even an explicit caller choice is removed on the NInfer fast path.
+				toolChoice: "none",
+			},
+			thinkingLevel: ThinkingLevel.Medium,
+			cachePreservingNInferResponses: true,
+		});
+
+		expect(document).toBe("## Goal\nCached handoff");
+		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
+		const call = completeSimpleSpy.mock.calls[0];
+		if (!call) throw new Error("Expected completeSimple call");
+		expect(call[2]?.toolChoice).toBeUndefined();
+		expect(call[2]?.reasoning).toBe(Effort.Medium);
+	});
+
+	test("generateHandoffFromContext retries NInfer tool output with none and no stateful child chaining", async () => {
+		const strayToolCall: ToolCall = {
+			type: "toolCall",
+			id: "call_ninfer_handoff",
+			name: "handoff_probe",
+			arguments: {},
+		};
+		const completeSimpleSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce(createAssistantMessage([strayToolCall]))
+			.mockResolvedValueOnce(createAssistantMessage([{ type: "text", text: "## Goal\nSafe fallback" }]));
+		const model = getNInferResponsesTestModel();
+		const context = {
+			systemPrompt: ["Live system prompt"],
+			tools: [createHandoffTool()],
+			messages: [{ role: "user" as const, content: "prepare handoff", timestamp: 1 }],
+		};
+
+		const document = await generateHandoffFromContext(context, model, {
+			streamOptions: {
+				apiKey: "test-key",
+				sessionId: "ninfer-main:side:2",
+				promptCacheKey: "ninfer-main",
+			},
+			thinkingLevel: ThinkingLevel.Medium,
+			cachePreservingNInferResponses: true,
+		});
+
+		expect(document).toBe("## Goal\nSafe fallback");
+		expect(completeSimpleSpy).toHaveBeenCalledTimes(2);
+		const firstCall = completeSimpleSpy.mock.calls[0];
+		const secondCall = completeSimpleSpy.mock.calls[1];
+		if (!firstCall || !secondCall) throw new Error("Expected NInfer handoff safety retry");
+		expect(firstCall[2]?.toolChoice).toBeUndefined();
+		expect(secondCall[2]).toMatchObject({
+			toolChoice: "none",
+			statefulResponses: false,
+			reasoning: Effort.Medium,
+		});
+	});
+
+	test("generateHandoffFromContext keeps historical NInfer no-tools behavior without cache opt-in", async () => {
+		const completeSimpleSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "## Goal\nNormal handoff" }]));
+		const model = getNInferResponsesTestModel();
+		const context = {
+			systemPrompt: ["Live system prompt"],
+			tools: [createHandoffTool()],
+			messages: [{ role: "user" as const, content: "prepare handoff", timestamp: 1 }],
+		};
+
+		const document = await generateHandoffFromContext(context, model, {
+			streamOptions: {
+				apiKey: "test-key",
+				sessionId: "ninfer-standalone",
+				promptCacheKey: "ninfer-standalone",
+			},
+			thinkingLevel: ThinkingLevel.Medium,
+		});
+
+		expect(document).toBe("## Goal\nNormal handoff");
+		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
+		const call = completeSimpleSpy.mock.calls[0];
+		if (!call) throw new Error("Expected completeSimple call");
+		expect(call[2]?.toolChoice).toBe("none");
+	});
+
+	test("generateHandoffFromContext does not retry an aborted opted-in NInfer tool response", async () => {
+		const strayToolCall: ToolCall = {
+			type: "toolCall",
+			id: "call_ninfer_aborted",
+			name: "handoff_probe",
+			arguments: {},
+		};
+		const abortedResponse = {
+			...createAssistantMessage([{ type: "text" as const, text: "partial handoff" }, strayToolCall]),
+			stopReason: "aborted" as const,
+		};
+		const completeSimpleSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue(abortedResponse);
+		const model = getNInferResponsesTestModel();
+		const context = {
+			systemPrompt: ["Live system prompt"],
+			tools: [createHandoffTool()],
+			messages: [{ role: "user" as const, content: "prepare handoff", timestamp: 1 }],
+		};
+
+		const document = await generateHandoffFromContext(context, model, {
+			streamOptions: {
+				apiKey: "test-key",
+				sessionId: "ninfer-main:side:aborted",
+				promptCacheKey: "ninfer-main",
+			},
+			thinkingLevel: ThinkingLevel.Medium,
+			cachePreservingNInferResponses: true,
+		});
+
+		expect(document).toBe("partial handoff");
+		expect(completeSimpleSpy).toHaveBeenCalledTimes(1);
 	});
 
 	test("generateHandoffFromContext retries auto-only tool_choice rejection with live tools", async () => {
