@@ -9,8 +9,9 @@ import {
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import { generateHandoffFromContext, renderHandoffPrompt } from "@oh-my-pi/pi-agent-core/compaction";
+import { forkOpenAIResponsesProviderSessionState } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import type { Message, Model, ServiceTier, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
-import { logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { obfuscateProviderContext } from "../secrets/message-transform";
@@ -94,6 +95,7 @@ export class SessionHandoff {
 		options?: SessionHandoffOptions,
 	): Promise<HandoffResult | undefined> {
 		this.#host.setSkipPostTurnMaintenance(undefined);
+		let isolatedHandoffProviderSessionState: ReturnType<typeof forkOpenAIResponsesProviderSessionState> = undefined;
 
 		this.#handoffAbortController = new AbortController();
 		const handoffAbortController = this.#handoffAbortController;
@@ -155,11 +157,50 @@ export class SessionHandoff {
 				handoffLlmMessages,
 				this.#host.baseSystemPrompt(),
 			);
+			const isNInferResponses = model.provider === "ninfer" && model.api === "openai-responses";
+			const handoffSessionId = `${cacheSessionId}:side:${Snowflake.next()}`;
+			if (isNInferResponses) {
+				// Fork only the live conversation's append baseline into fresh mutable
+				// state. The side session keeps its unique id; it never shares the main
+				// client's chain object or learned mutable provider state.
+				isolatedHandoffProviderSessionState = forkOpenAIResponsesProviderSessionState(
+					model,
+					this.#host.agent.providerSessionState,
+					this.#host.agent.sessionId,
+					handoffSessionId,
+				);
+			}
 			const handoffStreamOptions = this.#host.prepareSimpleStreamOptions(
 				{
 					apiKey: this.#host.modelRegistry.resolver(model, cacheSessionId),
-					sessionId: `${cacheSessionId}:side:${Snowflake.next()}`,
+					sessionId: handoffSessionId,
 					promptCacheKey: handoffPromptCacheKey,
+					maxTokens: 24_576,
+					...(isNInferResponses
+						? {
+								// A fork is useful only when stateful request shaping is actually
+								// enabled. If no live append baseline exists, keep the existing
+								// full-replay side-request behavior.
+								...(isolatedHandoffProviderSessionState
+									? {
+											providerSessionState: isolatedHandoffProviderSessionState,
+											statefulResponses: true,
+										}
+									: {}),
+								temperature: this.#host.agent.temperature,
+								topP: this.#host.agent.topP,
+								topK: this.#host.agent.topK,
+								minP: this.#host.agent.minP,
+								presencePenalty: this.#host.agent.presencePenalty,
+								repetitionPenalty: this.#host.agent.repetitionPenalty,
+								// NInfer can resolve a stored parent via previous_response_id while
+								// store=false. Inject this only after OMP's strict append comparison:
+								// the copied parent baseline remains store=true (byte-identical to
+								// live turns), while the final side request is disposable and cannot
+								// update the parent's server-side session index.
+								onPayload: payload => (isRecord(payload) ? { ...payload, store: false } : payload),
+							}
+						: {}),
 					preferWebsockets: false,
 					serviceTier: this.#host.effectiveServiceTier(model),
 					hideThinkingSummary: this.#host.agent.hideThinkingSummary,
@@ -183,6 +224,7 @@ export class SessionHandoff {
 					// resolveCompactionEffort so unsupported-effort models don't trip
 					// requireSupportedEffort.
 					thinkingLevel: this.#host.thinkingLevel(),
+					cachePreservingNInferResponses: isNInferResponses,
 				},
 			);
 			const handoffText = this.#host.deobfuscateFromProvider(rawHandoffText);
@@ -233,6 +275,18 @@ export class SessionHandoff {
 			throwIfHandoffAborted(handoffSignal);
 			throw error;
 		} finally {
+			// The fork owns fresh mutable provider state. Dispose it after the
+			// primary request and any no-tools safety retry; the live map is untouched.
+			if (isolatedHandoffProviderSessionState) {
+				for (const state of isolatedHandoffProviderSessionState.values()) {
+					try {
+						state.close();
+					} catch (error) {
+						logger.warn("Failed to close isolated handoff provider state", { error: String(error) });
+					}
+				}
+				isolatedHandoffProviderSessionState.clear();
+			}
 			sourceSignal?.removeEventListener("abort", onSourceAbort);
 			this.#handoffAbortController = undefined;
 		}
