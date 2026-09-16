@@ -4556,6 +4556,12 @@ export function buildResponsesDeltaInput<TItem extends ResponseInputItem | Input
 export function isOpenAIResponsesStalePreviousResponseError(error: unknown): boolean {
 	if (!error || typeof error !== "object") return false;
 	if ("code" in error && error.code === "previous_response_not_found") return true;
+	// Local Responses hosts (NInfer/Infernix) answer an unresolvable
+	// `previous_response_id` with 404 code `response_not_found` and a message
+	// ("response '<id>' not found") that lacks the "previous response" phrasing
+	// the message check below keys on. Without recognition the chained request
+	// hard-fails instead of degrading to the full-replay retry.
+	if ("code" in error && error.code === "response_not_found") return true;
 	if (!("message" in error) || typeof error.message !== "string") return false;
 	return (
 		/previous[ _]?response/i.test(error.message) &&
