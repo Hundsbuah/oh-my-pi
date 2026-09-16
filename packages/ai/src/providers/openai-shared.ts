@@ -3997,6 +3997,74 @@ function deepEqualsWithout(
 	return true;
 }
 
+export interface ResponsesDeltaReplayOptions {
+	/**
+	 * Accept the Responses API's semantically equivalent spellings of an
+	 * `input_image` detail default (`detail` omitted vs `detail: "auto"`).
+	 *
+	 * This is deliberately opt-in. Normal stateful turns keep strict wire
+	 * equality; isolated side-request forks may enable it because the parent
+	 * is already fixed by `previous_response_id` and replay reconstruction can
+	 * materialize the same historical image through either representation.
+	 */
+	allowEquivalentInputImages?: boolean;
+}
+
+function replayValueEquals(left: unknown, right: unknown, allowEquivalentInputImages: boolean): boolean {
+	if (left === right) return true;
+	if (Array.isArray(left) || Array.isArray(right)) {
+		if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+		for (let index = 0; index < left.length; index++) {
+			if (!replayValueEquals(left[index], right[index], allowEquivalentInputImages)) return false;
+		}
+		return true;
+	}
+	if (
+		allowEquivalentInputImages &&
+		isRecord(left) &&
+		isRecord(right) &&
+		left.type === "input_image" &&
+		right.type === "input_image"
+	) {
+		const leftDetail = left.detail === undefined ? "auto" : left.detail;
+		const rightDetail = right.detail === undefined ? "auto" : right.detail;
+		if (!Bun.deepEquals(leftDetail, rightDetail)) return false;
+
+		for (const key in left) {
+			if (key === "detail") continue;
+			if (!replayValueEquals(left[key], right[key], allowEquivalentInputImages)) return false;
+		}
+		for (const key in right) {
+			if (key === "detail") continue;
+			if (right[key] !== undefined && !(key in left)) return false;
+		}
+		return true;
+	}
+	return Bun.deepEquals(left, right);
+}
+
+function deepEqualsReplayItemWithout(
+	a: unknown,
+	b: unknown,
+	omitKeys: Readonly<Record<string, boolean>> | undefined,
+	allowEquivalentInputImages: boolean,
+): boolean {
+	if (!a || !b || typeof a !== "object" || typeof b !== "object") {
+		return replayValueEquals(a, b, allowEquivalentInputImages);
+	}
+	const ao = a as Record<string, unknown>;
+	const bo = b as Record<string, unknown>;
+	for (const key in ao) {
+		if (omitKeys?.[key]) continue;
+		if (!replayValueEquals(ao[key], bo[key], allowEquivalentInputImages)) return false;
+	}
+	for (const key in bo) {
+		if (omitKeys?.[key]) continue;
+		if (bo[key] !== undefined && !(key in ao)) return false;
+	}
+	return true;
+}
+
 const TOP_LEVEL_EXCLUDE_MAP = {
 	input: true,
 	client_metadata: true,
@@ -4037,6 +4105,7 @@ export function buildResponsesDeltaInput<TItem extends ResponseInputItem | Input
 	previousResponseItems: readonly TItem[] | undefined,
 	current: { input?: TItem[] },
 	additionalTopLevelExcludeMap?: Readonly<Record<string, boolean>>,
+	replayOptions?: ResponsesDeltaReplayOptions,
 ): TItem[] | null {
 	if (!previous) return null;
 	if (!Array.isArray(previous.input) || !Array.isArray(current.input)) return null;
@@ -4056,7 +4125,14 @@ export function buildResponsesDeltaInput<TItem extends ResponseInputItem | Input
 				type === "message" || type === "function_call" || type === "custom_tool_call"
 					? REPLAY_SANITIZED_ITEM_EXCLUDE_MAP
 					: ITEM_LIFECYCLE_EXCLUDE_MAP;
-			if (deepEqualsWithout(item, current.input[index], omitKeys)) {
+			if (
+				deepEqualsReplayItemWithout(
+					item,
+					current.input[index],
+					omitKeys,
+					replayOptions?.allowEquivalentInputImages === true,
+				)
+			) {
 				index++;
 			} else {
 				return null;

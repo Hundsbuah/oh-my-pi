@@ -417,6 +417,13 @@
 - A corrupted or externally modified session file no longer leaves the session impossible to close; a subsequent Ctrl+C exits without rewriting the session log.
 - Fixed silent MCP requests being terminated by an undeclared idle timeout; closing a legacy SSE connection now also cancels pending requests and notifications.
 - Fixed browser reuse for Chromium installed behind Linux wrapper scripts and prevented duplicate launches when a profile is locked ([#12236](https://github.com/can1357/oh-my-pi/pull/12236) by [@shivamklr](https://github.com/shivamklr)).
+- Fixed browser reuse for Chromium installed behind Linux wrapper scripts and prevented duplicate launches when a profile is locked.
+- Agent and history database startup errors now identify the failing database file, including corruption found during schema initialization.
+- Compaction handoffs on NInfer Responses models no longer replay the full conversation prefix: the handoff request now matches the live turn's output budget and compares forked image items with the Responses API's default detail spelling, so `previous_response_id` append gating passes and the handoff prefills only the appended delta.
+- Corrupt agent and prompt-history databases no longer prevent startup: damaged files are preserved as private `.corrupt-*` backups before creating fresh stores; lost credentials require logging in again.
+- Terminal title spinner now animates on native Windows via `SetConsoleTitleW` instead of staying on the static `:` separator; WSL keeps the static separator to avoid the ConPTY write-loop CPU cost ([#12250](https://github.com/can1357/oh-my-pi/pull/12250) by [@H4vC](https://github.com/H4vC)).
+- Prewalk now hands off after an edit/write dispatched through an eval cell: Code Mode routes those tools through the eval bridge, so the turn-level result is named `eval` and the old detector never recognized the nested mutation ([#11018](https://github.com/can1357/oh-my-pi/issues/11018)).
+- Fixed repeated 0.3–1.5s main-thread stalls (`ui.loop-blocked`) while streaming large edits: TTSR awaited a native `astMatch` pass per `toolcall_delta`, so a streamed 150KB edit paid ~90ms per delta per rule entry; AST rules now run once on the finalized `toolcall_end` while regex rules keep streaming per delta.
 
 ## [18.2.1] - 2026-09-15
 
