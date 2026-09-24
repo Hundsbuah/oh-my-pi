@@ -645,6 +645,8 @@ function isOpenAIResponsesStatefulEnabled(
 	// Default ON only against the official OpenAI API: chaining forces
 	// `store: true`, and third-party /v1/responses proxies routinely ignore or
 	// reject `previous_response_id`.
+	// NInfer/Infernix hosts speak the same stored-response protocol; enable via
+	// `compat.statefulResponses: true` in models.yml (no provider branch here).
 	return $flag("PI_OPENAI_STATEFUL", model.compat.statefulResponses ?? model.compat.officialEndpoint);
 }
 
