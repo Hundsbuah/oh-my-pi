@@ -1,5 +1,5 @@
 import { scheduler } from "node:timers/promises";
-import { $flag, logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getEnvApiKey } from "../stream";
 import type {
@@ -356,12 +356,11 @@ function isOpenAIResponsesStatefulEnabled(
 	options: OpenAIResponsesOptions | undefined,
 	model: Model<"openai-responses">,
 ): boolean {
+	if (model.provider !== "ninfer") return false;
+
 	if (options?.statefulResponses === false) return false;
-	if (options?.statefulResponses === true) return true;
-	// Default ON only against the official OpenAI API: chaining forces
-	// `store: true`, and third-party /v1/responses proxies routinely ignore or
-	// reject `previous_response_id`.
-	return $flag("PI_OPENAI_STATEFUL", model.compat.officialEndpoint);
+
+	return true;
 }
 
 function getOpenAIResponsesChainState(
