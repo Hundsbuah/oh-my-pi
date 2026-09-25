@@ -228,8 +228,6 @@ interface OpenAIResponsesChainState {
 	 * equality for every other history field.
 	 */
 	allowEquivalentInputImages?: boolean;
-	/** Forks size their own window-fitted output cap; `max_output_tokens` is not conversation state. */
-	allowOutputBudgetDrift?: boolean;
 	canAppend: boolean;
 	/** Consecutive stale-previous-response failures; reset on a successful chained completion. */
 	staleFailures: number;
@@ -280,8 +278,9 @@ function getOpenAIResponsesProviderSessionState(
  *
  * This does not weaken the normal append gate. `buildResponsesDeltaInput()`
  * still compares the freshly-built target request against the copied wire
- * baseline and falls back to a full replay if history or request options differ;
- * only the per-request `max_output_tokens` is exempt on forked chains.
+ * baseline and falls back to a full replay if history or request options
+ * differ; only the per-request `max_output_tokens` is exempt everywhere,
+ * because it sizes the new generation, not the resolved history.
  *
  * @internal Used by cache-preserving isolated side requests such as handoff.
  */
@@ -329,7 +328,6 @@ export function forkOpenAIResponsesProviderSessionState(
 				lastResponseId: sourceChain.lastResponseId,
 				lastResponseItems: structuredCloneJSON(sourceChain.lastResponseItems),
 				allowEquivalentInputImages: true,
-				allowOutputBudgetDrift: true,
 				canAppend: true,
 				staleFailures: sourceChain.staleFailures,
 				disabled: false,
@@ -416,7 +414,15 @@ export function resetOpenAIResponsesAccountScopedState(states: Map<string, Provi
 	}
 }
 
-const FORKED_CHAIN_TOP_LEVEL_EXCLUDE_MAP = { max_output_tokens: true } as const;
+/**
+ * Append-gate exemption for the Responses provider: `max_output_tokens` is a
+ * per-request generation limit, not conversation state. The window-fitted cap
+ * (`fitOutputTokensToContextWindow`) drifts as the prompt grows — on live
+ * turns every request re-fits, and forked side requests carry different
+ * context than the baseline they copied. `previous_response_id` resolves the
+ * same history either way, so a cap change must not break the chain.
+ */
+const RESPONSES_CHAIN_TOP_LEVEL_EXCLUDE_MAP = { max_output_tokens: true } as const;
 
 interface OpenAIResponsesChainedParams {
 	params: OpenAIResponsesSamplingParams;
@@ -446,7 +452,7 @@ function buildOpenAIResponsesChainedParams(
 				chain.lastParams,
 				chain.lastResponseItems,
 				historyParams,
-				chain.allowOutputBudgetDrift === true ? FORKED_CHAIN_TOP_LEVEL_EXCLUDE_MAP : undefined,
+				RESPONSES_CHAIN_TOP_LEVEL_EXCLUDE_MAP,
 				{ allowEquivalentInputImages: chain.allowEquivalentInputImages === true },
 			)
 		: null;
