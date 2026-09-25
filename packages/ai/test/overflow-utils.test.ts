@@ -163,6 +163,24 @@ describe("isContextOverflow/isPayloadRejection - HTTP 413 variants", () => {
 		expect(isPayloadRejection(message)).toBe(false);
 	});
 });
+describe("NInfer media_budget_exceeded rejections", () => {
+	it("classifies the structured error code as a payload rejection when the message omits it", () => {
+		const withCode = AIError.classify(
+			new AIError.ProviderHttpError("400 vision tokens exceed processor budget", 400, {
+				code: "media_budget_exceeded",
+			}),
+		);
+		expect(AIError.is(withCode, AIError.Flag.PayloadRejected)).toBe(true);
+		expect(AIError.is(withCode, AIError.Flag.ContextOverflow)).toBe(false);
+		expect(AIError.is(withCode, AIError.Flag.Transient)).toBe(false);
+
+		// The wording alone names no payload/media budget.
+		const withoutCode = AIError.classify(
+			new AIError.ProviderHttpError("400 vision tokens exceed processor budget", 400),
+		);
+		expect(AIError.is(withoutCode, AIError.Flag.PayloadRejected)).toBe(false);
+	});
+});
 describe("isContextOverflow - 400/413 no-body (Cerebras, Mistral, proxy wrappers)", () => {
 	it("detects '400 (no body)' without 'status code' word", () => {
 		expect(isContextOverflow(createErrorMessage("400 (no body)"))).toBe(true);
