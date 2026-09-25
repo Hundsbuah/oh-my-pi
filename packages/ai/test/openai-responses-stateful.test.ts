@@ -360,6 +360,72 @@ describe("openai-responses stateful chaining", () => {
 		sideProviderSessionState.clear();
 	});
 
+	it("chains a forked side request whose window-fitted output cap differs, while live turns stay strict", async () => {
+		// Output fitting (`fitOutputTokensToContextWindow`) shrinks the handoff's
+		// cap below the live baseline near the window; without the fork exemption
+		// the handoff full-replays the whole prefix.
+		const ninferModel = { ...model, provider: "ninfer" } as Model<"openai-responses">;
+		const sentRequests: Array<Record<string, unknown>> = [];
+		const fetchMock = createCapturingFetch(sentRequests);
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const parentSessionId = "stateful-fork-output-budget-parent";
+		const parentOptions = {
+			apiKey: "test-key",
+			sessionId: parentSessionId,
+			promptCacheKey: parentSessionId,
+			providerSessionState,
+			statefulResponses: true,
+			maxTokens: 32_000,
+			fetch: fetchMock,
+		};
+		const firstUser = { role: "user" as const, content: "First question", timestamp: 1000 };
+		const firstResponse = await streamOpenAIResponses(
+			ninferModel,
+			{ systemPrompt, messages: [firstUser] },
+			parentOptions,
+		).result();
+
+		const sideSessionId = `${parentSessionId}:side:handoff:3`;
+		const sideProviderSessionState = forkOpenAIResponsesProviderSessionState(
+			ninferModel,
+			providerSessionState,
+			parentSessionId,
+			sideSessionId,
+		);
+		if (!sideProviderSessionState) throw new Error("Expected an isolated Responses state fork");
+
+		const sideUser = { role: "user" as const, content: "Generate handoff", timestamp: 1001 };
+		await streamOpenAIResponses(
+			ninferModel,
+			{ systemPrompt, messages: [firstUser, firstResponse, sideUser] },
+			{
+				...parentOptions,
+				sessionId: sideSessionId,
+				providerSessionState: sideProviderSessionState,
+				maxTokens: 9_000,
+			},
+		).result();
+
+		const secondMainUser = { role: "user" as const, content: "Second main question", timestamp: 1002 };
+		await streamOpenAIResponses(
+			ninferModel,
+			{ systemPrompt, messages: [firstUser, firstResponse, secondMainUser] },
+			{ ...parentOptions, maxTokens: 8_000 },
+		).result();
+
+		expect(sentRequests).toHaveLength(3);
+		expect(sentRequests[0]?.max_output_tokens).toBe(32_000);
+		expect(sentRequests[1]?.previous_response_id).toBe("resp_1");
+		expect(sentRequests[1]?.max_output_tokens).toBe(9_000);
+		expect(JSON.stringify(sentRequests[1]?.input)).not.toContain("First question");
+		expect(sentRequests[2]?.previous_response_id).toBeUndefined();
+		expect(sentRequests[2]?.max_output_tokens).toBe(8_000);
+		expect(JSON.stringify(sentRequests[2]?.input)).toContain("First question");
+
+		for (const state of sideProviderSessionState.values()) state.close();
+		sideProviderSessionState.clear();
+	});
+
 	it("keeps the automatic explicit cache breakpoint stable across chained turns", async () => {
 		const sentRequests: Array<Record<string, unknown>> = [];
 		const fetchMock = createCapturingFetch(sentRequests);

@@ -228,6 +228,8 @@ interface OpenAIResponsesChainState {
 	 * equality for every other history field.
 	 */
 	allowEquivalentInputImages?: boolean;
+	/** Forks size their own window-fitted output cap; `max_output_tokens` is not conversation state. */
+	allowOutputBudgetDrift?: boolean;
 	canAppend: boolean;
 	/** Consecutive stale-previous-response failures; reset on a successful chained completion. */
 	staleFailures: number;
@@ -278,7 +280,8 @@ function getOpenAIResponsesProviderSessionState(
  *
  * This does not weaken the normal append gate. `buildResponsesDeltaInput()`
  * still compares the freshly-built target request against the copied wire
- * baseline and falls back to a full replay if history or request options differ.
+ * baseline and falls back to a full replay if history or request options differ;
+ * only the per-request `max_output_tokens` is exempt on forked chains.
  *
  * @internal Used by cache-preserving isolated side requests such as handoff.
  */
@@ -326,6 +329,7 @@ export function forkOpenAIResponsesProviderSessionState(
 				lastResponseId: sourceChain.lastResponseId,
 				lastResponseItems: structuredCloneJSON(sourceChain.lastResponseItems),
 				allowEquivalentInputImages: true,
+				allowOutputBudgetDrift: true,
 				canAppend: true,
 				staleFailures: sourceChain.staleFailures,
 				disabled: false,
@@ -412,6 +416,8 @@ export function resetOpenAIResponsesAccountScopedState(states: Map<string, Provi
 	}
 }
 
+const FORKED_CHAIN_TOP_LEVEL_EXCLUDE_MAP = { max_output_tokens: true } as const;
+
 interface OpenAIResponsesChainedParams {
 	params: OpenAIResponsesSamplingParams;
 	/** Set iff the params carry previous_response_id (delta request). */
@@ -436,9 +442,13 @@ function buildOpenAIResponsesChainedParams(
 			? { ...params, input: params.input.slice(0, params.input.length - trailingScaffoldingItems) }
 			: params;
 	const deltaInput = chain.canAppend
-		? buildResponsesDeltaInput(chain.lastParams, chain.lastResponseItems, historyParams, undefined, {
-				allowEquivalentInputImages: chain.allowEquivalentInputImages === true,
-			})
+		? buildResponsesDeltaInput(
+				chain.lastParams,
+				chain.lastResponseItems,
+				historyParams,
+				chain.allowOutputBudgetDrift === true ? FORKED_CHAIN_TOP_LEVEL_EXCLUDE_MAP : undefined,
+				{ allowEquivalentInputImages: chain.allowEquivalentInputImages === true },
+			)
 		: null;
 	if (deltaInput && deltaInput.length > 0 && chain.lastResponseId) {
 		const scaffolding =
