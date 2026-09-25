@@ -360,10 +360,11 @@ describe("openai-responses stateful chaining", () => {
 		sideProviderSessionState.clear();
 	});
 
-	it("chains a forked side request whose window-fitted output cap differs, while live turns stay strict", async () => {
-		// Output fitting (`fitOutputTokensToContextWindow`) shrinks the handoff's
-		// cap below the live baseline near the window; without the fork exemption
-		// the handoff full-replays the whole prefix.
+	it("chains forked side requests and live turns whose window-fitted output cap differs", async () => {
+		// Output fitting (`fitOutputTokensToContextWindow`) shrinks caps below
+		// the previous turn's wire baseline near the window. The output cap is a
+		// per-request generation limit, not conversation state, so neither the
+		// handoff fork nor the live turn may full-replay on a cap drift.
 		const ninferModel = { ...model, provider: "ninfer" } as Model<"openai-responses">;
 		const sentRequests: Array<Record<string, unknown>> = [];
 		const fetchMock = createCapturingFetch(sentRequests);
@@ -418,9 +419,9 @@ describe("openai-responses stateful chaining", () => {
 		expect(sentRequests[1]?.previous_response_id).toBe("resp_1");
 		expect(sentRequests[1]?.max_output_tokens).toBe(9_000);
 		expect(JSON.stringify(sentRequests[1]?.input)).not.toContain("First question");
-		expect(sentRequests[2]?.previous_response_id).toBeUndefined();
+		expect(sentRequests[2]?.previous_response_id).toBe("resp_1");
 		expect(sentRequests[2]?.max_output_tokens).toBe(8_000);
-		expect(JSON.stringify(sentRequests[2]?.input)).toContain("First question");
+		expect(JSON.stringify(sentRequests[2]?.input)).not.toContain("First question");
 
 		for (const state of sideProviderSessionState.values()) state.close();
 		sideProviderSessionState.clear();

@@ -178,7 +178,7 @@ export class SessionHandoff {
 					sessionId: handoffSessionId,
 					promptCacheKey: handoffPromptCacheKey,
 					// No handoff-only maxTokens: all providers keep the model's default
-					// budget; the forked NInfer chain tolerates the window-fitted cap.
+					// budget; the NInfer chain tolerates the window-fitted cap.
 					...(isNInferResponses
 						? {
 								// A fork is useful only when stateful request shaping is actually
