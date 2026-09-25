@@ -1041,6 +1041,59 @@ describe("AgentSession payload-rejection 413 handling", () => {
 		expect(payloadNotices.length).toBe(1);
 	});
 
+	it("keeps a NInfer media_budget_exceeded 400 on the terminal media path with no context window and compaction available", async () => {
+		// "vision tokens exceed processor budget" names no image/frame/pixel noun;
+		// only the error code proves the media budget. Without it the session
+		// compacts (snapcompact adds frames) and resends the same images.
+		await createSession(null);
+		const checkSpy = vi.spyOn(SessionMaintenance.prototype, "checkCompaction");
+		const prepareSpy = vi.spyOn(compactionModule, "prepareCompaction");
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		const notices = collectNotices();
+		const startCount = countCompactionEvents("auto_compaction_start");
+
+		const assistantMsg = {
+			role: "assistant",
+			content: [{ type: "text", text: "" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			stopReason: "error",
+			errorStatus: 400,
+			errorMessage:
+				"400 vision tokens exceed processor budget\nvision tokens exceed processor budget (type=invalid_request_error param=input code=media_budget_exceeded)",
+			usage: {
+				input: 1000,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		} as AssistantMessage;
+		assistantMsg.errorId = AIError.classifyMessage(assistantMsg);
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await session.waitForIdle();
+
+		expect(startCount()).toBe(0);
+		expect(prepareSpy).not.toHaveBeenCalled();
+		expect(promptSpy).not.toHaveBeenCalled();
+		expect(continueSpy).not.toHaveBeenCalled();
+
+		const payloadNotices = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes("media budget"));
+		expect(payloadNotices.length).toBe(1);
+		expect(payloadNotices[0].message).toContain("HTTP 400");
+		const checkResults = await Promise.all(
+			checkSpy.mock.results.map(r => r.value as { automaticContinuationBlocked?: boolean }),
+		);
+		expect(checkResults.some(r => r.automaticContinuationBlocked === true)).toBe(true);
+	});
+
 	function activateOngoingGoal(id: string): void {
 		const now = Date.now();
 		session.setGoalModeState({
