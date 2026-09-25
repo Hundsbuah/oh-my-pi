@@ -143,6 +143,7 @@ const PAYLOAD_REJECTION_PATTERNS = [
 	/request_too_large/i,
 	/(?:payload|entity) too large/i,
 	/request exceeds the maximum (?:size|number of bytes)/i,
+	/\bmedia_budget_exceeded\b/i, // NInfer: vision-token/media-byte budget of the prompt
 ] as const;
 
 function matchesPayloadRejectionText(text: string): boolean {
@@ -666,6 +667,9 @@ export function classify(error: unknown, api?: Api): number {
 			}
 			if (code === "overloaded_error" || code === "rate_limit_error") {
 				linkKinds |= Flag.Transient;
+			}
+			if (code === "media_budget_exceeded") {
+				linkKinds |= Flag.PayloadRejected;
 			}
 			if (
 				code === "oauth_not_allowed_for_organization" ||

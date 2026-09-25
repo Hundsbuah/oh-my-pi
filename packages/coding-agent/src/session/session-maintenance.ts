@@ -241,10 +241,12 @@ function hasUsableCompactionMethod(
  * of N images", "maximum (of N) images", "number/count of images",
  * "images exceeds ... maximum", and per-image size/dimension rejections
  * like "image is too large" or "image dimensions exceed 8000 pixels"
- * (#11482).
+ * (#11482). A provider error code that names a media budget
+ * (`media_budget_exceeded`, NInfer's vision-token/media-byte cap) is
+ * evidence on its own.
  */
 const PAYLOAD_MEDIA_LIMIT_EVIDENCE_PATTERN =
-	/\btoo many (?:images?|frames?|pixels?)\b|\b(?:images?|frames?|pixels?)\s*(?:count|limit)\b|\blimit of \d+\s*(?:images?|frames?|pixels?)\b|\bmaximum(?: of \d+)? (?:images?|frames?|pixels?)\b|\b(?:number|count) of (?:images?|frames?|pixels?)\b|\b(?:images?|frames?|pixels?)\b.{0,20}\bexceeds?\b.{0,20}\bmaximum\b|\b(?:images?|frames?) (?:is |are )?too large\b|\b(?:images?|frames?) dimensions?\b.{0,30}\bexceeds?\b.{0,30}\b(?:pixels?|\d+)\b/i;
+	/\btoo many (?:images?|frames?|pixels?)\b|\b(?:images?|frames?|pixels?)\s*(?:count|limit)\b|\blimit of \d+\s*(?:images?|frames?|pixels?)\b|\bmaximum(?: of \d+)? (?:images?|frames?|pixels?)\b|\b(?:number|count) of (?:images?|frames?|pixels?)\b|\b(?:images?|frames?|pixels?)\b.{0,20}\bexceeds?\b.{0,20}\bmaximum\b|\b(?:images?|frames?) (?:is |are )?too large\b|\b(?:images?|frames?) dimensions?\b.{0,30}\bexceeds?\b.{0,30}\b(?:pixels?|\d+)\b|\bmedia_budget_exceeded\b/i;
 function hasExplicitMediaRejectionEvidence(errorMessage: string | undefined): boolean {
 	return errorMessage !== undefined && PAYLOAD_MEDIA_LIMIT_EVIDENCE_PATTERN.test(errorMessage);
 }
@@ -262,15 +264,15 @@ function compactionDeadEndWarning(remedies: string): string {
 	);
 }
 
-/** Honest-skip notice for a payload-shaped HTTP 413 where compaction was correctly withheld (#9235). */
-function payloadRejectionNotice(storedTokens: number, contextWindow: number): string {
+/** Honest-skip notice for a payload-shaped rejection where compaction was correctly withheld (#9235). */
+function payloadRejectionNotice(storedTokens: number, contextWindow: number, status = 413): string {
 	const remedies =
-		"Token compaction cannot shrink bytes or image budgets; reduce or remove archived image frames (e.g. switch compaction.methodOrder away from snapcompact) or raise the server/proxy body limit.";
+		"Token compaction cannot shrink bytes or image budgets; remove attached images (`/shake images`), reduce or remove archived image frames (e.g. switch compaction.methodOrder away from snapcompact), or raise the server/proxy body limit.";
 	if (contextWindow <= 0) {
-		return `The provider rejected the request size or media budget (HTTP 413), and this model has no known context window to compare against — this is NOT a token-context problem. ${remedies}`;
+		return `The provider rejected the request size or media budget (HTTP ${status}), and this model has no known context window to compare against — this is NOT a token-context problem. ${remedies}`;
 	}
 	const headroom = Math.max(0, Math.floor(contextWindow - storedTokens));
-	return `The provider rejected the request size or media budget (HTTP 413), but ~${headroom.toLocaleString("en-US")} tokens of headroom remain locally — this is NOT a token-context problem. ${remedies}`;
+	return `The provider rejected the request size or media budget (HTTP ${status}), but ~${headroom.toLocaleString("en-US")} tokens of headroom remain locally — this is NOT a token-context problem. ${remedies}`;
 }
 
 /** Dead-end notice when provider-reported usage proves context overflow but no recovery exists (#9235). */
@@ -2770,6 +2772,7 @@ export class SessionMaintenance {
 		const ambiguousPayloadRejection =
 			payloadRejection && AIError.is(assistantMessage.errorId, AIError.Flag.ContextOverflow);
 		const storedTokens = payloadRejection && contextWindow > 0 ? this.#estimateStoredContextTokens() : 0;
+		const payloadStatus = assistantMessage.errorStatus ?? 413;
 		const reportedInputTokens =
 			assistantMessage.usage.input + assistantMessage.usage.cacheRead + assistantMessage.usage.cacheWrite;
 		const trustedPayloadRejection =
@@ -2851,7 +2854,11 @@ export class SessionMaintenance {
 			// is always the honest "NOT a token-context problem" notice — the sibling
 			// usage-backed selection lives further down, where that case is reachable.
 			this.#host.removeAssistantMessageFromActiveContext(assistantMessage);
-			this.#host.emitNotice("warning", payloadRejectionNotice(storedTokens, contextWindow), "compaction");
+			this.#host.emitNotice(
+				"warning",
+				payloadRejectionNotice(storedTokens, contextWindow, payloadStatus),
+				"compaction",
+			);
 			logger.debug("Payload-shaped 413 withheld from token compaction", {
 				provider: assistantMessage.provider,
 				model: assistantMessage.model,
@@ -2932,7 +2939,7 @@ export class SessionMaintenance {
 						"warning",
 						usageBackedOverflow
 							? usageOverflowDeadEndNotice(reportedInputTokens, contextWindow)
-							: payloadRejectionNotice(storedTokens, contextWindow),
+							: payloadRejectionNotice(storedTokens, contextWindow, payloadStatus),
 						"compaction",
 					);
 					logger.debug("Payload-shaped 413 compaction attempt made no progress; blocking automatic continuation", {
@@ -2951,7 +2958,7 @@ export class SessionMaintenance {
 					"warning",
 					usageBackedOverflow
 						? usageOverflowDeadEndNotice(reportedInputTokens, contextWindow)
-						: payloadRejectionNotice(storedTokens, contextWindow),
+						: payloadRejectionNotice(storedTokens, contextWindow, payloadStatus),
 					"compaction",
 				);
 				logger.debug("Payload-shaped 413 has no runnable recovery; blocking automatic continuation", {
