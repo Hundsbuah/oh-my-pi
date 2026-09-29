@@ -206,6 +206,17 @@
 
 ## [18.4.9] - 2026-10-01
 
+- Added `compat.bedrockMessagesApi` to `models.yml`, so Claude reached through a proxy or an `ANTHROPIC_BASE_URL` reroute to Bedrock's `/anthropic` API gets Bedrock request shaping and on-demand compaction; `false` opts a Bedrock URL out ([#13311](https://github.com/can1357/oh-my-pi/pull/13311)).
+- Submitting exactly `exit`, `quit`, or `q` (any case, no leading `/`, nothing else in the input) in a session with no messages now quits; turn off with `input.bareExitOnEmptySession` ([#13755](https://github.com/can1357/oh-my-pi/pull/13755) by [@H4vC](https://github.com/H4vC))
+- Extensions can now rewrite finalized assistant-message text through the awaited `assistant_message` hook before it reaches context, history, and `message_end` ([#13769](https://github.com/can1357/oh-my-pi/pull/13769) by [@NaC-L](https://github.com/nac-l))
+- Added `additionalContext` to extension and hook `tool_result` results, so success- and failure-specific post-tool guidance reaches the model through the trusted developer channel instead of altering tool output ([#13267](https://github.com/can1357/oh-my-pi/pull/13267) by [@andrebrait](https://github.com/andrebrait)).
+- Added per-role skill visibility control for subagents via agent frontmatter: `skills` (allowlist globs; `"none"`/`[]` lists none), `hideSkills` (denylist globs, highest precedence), and `unhideSkills` (re-exposes skills whose `SKILL.md` sets `hide: true`) — see [#4570](https://github.com/can1357/oh-my-pi/issues/4570). Controls the rendered `<skills>` block only; hidden skills remain loadable via `skill://<name>` and `/skill:<name>`.
+
+### Fixed
+
+- Fixed `computer.window(74)` matching every open window and `computer.window({ id: 74 })` matching none; a numeric id now resolves the same window as `"74"` ([#13649](https://github.com/can1357/oh-my-pi/pull/13649) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed hosted OpenAI web search on hosts that accept only string tool_choice values, such as Command Code ([#13666](https://github.com/can1357/oh-my-pi/pull/13666) by [@riicodespretty](https://github.com/riicodespretty))
+- Compaction handoffs on NInfer Responses models no longer replay the full conversation prefix: the handoff request now matches the live turn's output budget and compares forked image items with the Responses API's default detail spelling, so `previous_response_id` append gating passes and the handoff prefills only the appended delta.
 ### Added
 
 - Added opt-in stale-session garbage collection with `omp gc --stale` or `gc.stale`, removing orphaned session markers and terminal breadcrumbs and expiring old debug reports and collaboration replicas according to configurable retention limits.
@@ -987,7 +998,6 @@
 - Fixed browser reuse for Chromium installed behind Linux wrapper scripts and prevented duplicate launches when a profile is locked ([#12236](https://github.com/can1357/oh-my-pi/pull/12236) by [@shivamklr](https://github.com/shivamklr)).
 - Fixed browser reuse for Chromium installed behind Linux wrapper scripts and prevented duplicate launches when a profile is locked.
 - Agent and history database startup errors now identify the failing database file, including corruption found during schema initialization.
-- Compaction handoffs on NInfer Responses models no longer replay the full conversation prefix: the handoff request now matches the live turn's output budget and compares forked image items with the Responses API's default detail spelling, so `previous_response_id` append gating passes and the handoff prefills only the appended delta.
 - Corrupt agent and prompt-history databases no longer prevent startup: damaged files are preserved as private `.corrupt-*` backups before creating fresh stores; lost credentials require logging in again.
 - Terminal title spinner now animates on native Windows via `SetConsoleTitleW` instead of staying on the static `:` separator; WSL keeps the static separator to avoid the ConPTY write-loop CPU cost ([#12250](https://github.com/can1357/oh-my-pi/pull/12250) by [@H4vC](https://github.com/H4vC)).
 - Prewalk now hands off after an edit/write dispatched through an eval cell: Code Mode routes those tools through the eval bridge, so the turn-level result is named `eval` and the old detector never recognized the nested mutation ([#11018](https://github.com/can1357/oh-my-pi/issues/11018)).
@@ -1368,7 +1378,6 @@
 
 ### Added
 
-- Added per-role skill visibility control for subagents via agent frontmatter: `skills` (allowlist globs; `"none"`/`[]` lists none), `hideSkills` (denylist globs, highest precedence), and `unhideSkills` (re-exposes skills whose `SKILL.md` sets `hide: true`) — see [#4570](https://github.com/can1357/oh-my-pi/issues/4570). Controls the rendered `<skills>` block only; hidden skills remain loadable via `skill://<name>` and `/skill:<name>`.
 - Added `ollama` web search provider using Ollama's hosted web search API (`POST https://ollama.com/api/web_search`), authenticated via `OLLAMA_CLOUD_API_KEY` ([#3791](https://github.com/can1357/oh-my-pi/issues/3791)).
 - Added `readUrl` support for Ollama model pages (`ollama.com/<model>` and `ollama.com/library/<model>`), extracting descriptions, tags, and architecture metadata.
 - `@upstream` routing selectors accept tiered OpenRouter slugs (`openrouter/google/gemini-3.8-flash@google-ai-studio/priority`), and `omp bench` labels each routed model with its upstream.
