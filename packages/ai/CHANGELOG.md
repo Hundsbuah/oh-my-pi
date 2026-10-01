@@ -8,6 +8,7 @@
 
 - Fixed Antigravity chat and image requests sending an outdated client version when the model list came from cache, which could make newer models such as Claude Opus 5.5 unavailable.
 - When a DeepSeek model writes a broken DSML tool call (for example with the opening `<｜DSML｜tool_calls>` and `<｜DSML｜invoke>` tags missing), its closing tags are now kept in the streamed text instead of being dropped. This lets the agent remove exactly the broken call while keeping any text after it ([#14202](https://github.com/can1357/oh-my-pi/pull/14202) by [@H4vC](https://github.com/H4vC)).
+- Fixed OpenAI Responses chain recovery on local hosts (e.g. NInfer): a `404 response_not_found` rejection of `previous_response_id` now degrades to a full-context replay retry within the same request instead of failing the turn or the compaction handoff.
 
 ## [18.5.1] - 2026-10-03
 
@@ -89,10 +90,6 @@
 
 - Added the `ultrafast` service tier. It is sent to the OpenAI API as-is, and to Codex only for models that list it in their discovered service tiers; other providers never receive it. On Codex websockets, switching into or out of `ultrafast` starts a new response chain instead of reusing `previous_response_id`, matching the Codex CLI. Ultrafast turns are costed at standard rates because no Ultrafast price is published yet ([#13782](https://github.com/can1357/oh-my-pi/pull/13782) by [@H4vC](https://github.com/H4vC)).
 
-- Fixed Claude on Amazon Bedrock's Anthropic Messages routes (`/anthropic` on bedrock-runtime and bedrock-mantle): runtime requests no longer fail with a request-metadata 400, and both routes use Anthropic's on-demand compaction ([#13311](https://github.com/can1357/oh-my-pi/pull/13311) by [@mustafaabidali](https://github.com/mustafaabidali)).
-- `/usage` no longer shows an always-empty `gpt-4 requests` row for Cursor accounts on usage-based plans; the Cursor Models and Other Models meters remain ([#13726](https://github.com/can1357/oh-my-pi/pull/13726) by [@will-bogusz](https://github.com/will-bogusz)).
-- Cursor turns routed through an HTTP proxy now finish instead of hanging after the response completes ([#13724](https://github.com/can1357/oh-my-pi/pull/13724) by [@will-bogusz](https://github.com/will-bogusz)).
-- Fixed OpenAI Responses chain recovery on local hosts (e.g. NInfer): a `404 response_not_found` rejection of `previous_response_id` now degrades to a full-context replay retry within the same request instead of failing the turn or the compaction handoff.
 ### Changed
 
 - Changed to fall back to adaptive thinking when between_tools is used with xhigh effort
