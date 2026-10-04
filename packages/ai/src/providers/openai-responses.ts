@@ -1012,32 +1012,57 @@ const streamOpenAIResponsesOnce = (
 			if (replayableResponseItems) {
 				if (providerSessionState) providerSessionState.nativeHistoryReplayWarmed = true;
 				if (chainState) {
-					chainState.lastParams = structuredCloneJSON(
-						activeTrailingScaffoldingItems > 0 && Array.isArray(activeParams.input)
-							? {
-									...activeParams,
-									input: activeParams.input.slice(
-										0,
-										activeParams.input.length - activeTrailingScaffoldingItems,
-									),
-								}
-							: activeParams,
-					);
-					chainState.lastPromptCacheBreakpointPolicy = promptCacheBreakpointPolicy;
-					if (output.responseId && replayableResponseItems.length === nativeOutputItems.length) {
-						chainState.lastResponseId = output.responseId;
-						chainState.lastResponseItems = replayableResponseItems;
-						chainState.canAppend = true;
-						// Only a successful CHAINED completion clears the stale counter — a
-						// full-context success must not mask categorical rejection.
-						if (sentPreviousResponseId) chainState.staleFailures = 0;
-					} else {
-						// No response id, or replay sanitization dropped an item the server
-						// still holds. Sanitization is 1:1-or-fewer, so either case makes the
-						// append baseline untrustworthy; next turn must replay in full.
+					if (output.ninferToolCallRecovery) {
+						// R17-02D: NInfer rejected this turn's tool-call markup fail-closed and
+						// returned it as ordinary text. The agent loop discards the rejected turn
+						// from the context and regenerates the call, so this response must not
+						// become the stateful `previous_response_id` baseline: appending to it
+						// would embed the rejected markup as the authoritative assistant output
+						// server-side. Record only the wire controls (same shape as the
+						// non-appendable branch below); the next turn replays the full history.
 						chainState.canAppend = false;
+						chainState.lastParams = structuredCloneJSON(
+							activeTrailingScaffoldingItems > 0 && Array.isArray(activeParams.input)
+								? {
+										...activeParams,
+										input: activeParams.input.slice(
+											0,
+											activeParams.input.length - activeTrailingScaffoldingItems,
+										),
+									}
+								: activeParams,
+						);
+						chainState.lastPromptCacheBreakpointPolicy = promptCacheBreakpointPolicy;
 						chainState.lastResponseId = undefined;
 						chainState.lastResponseItems = undefined;
+					} else {
+						chainState.lastParams = structuredCloneJSON(
+							activeTrailingScaffoldingItems > 0 && Array.isArray(activeParams.input)
+								? {
+										...activeParams,
+										input: activeParams.input.slice(
+											0,
+											activeParams.input.length - activeTrailingScaffoldingItems,
+										),
+									}
+								: activeParams,
+						);
+						chainState.lastPromptCacheBreakpointPolicy = promptCacheBreakpointPolicy;
+						if (output.responseId && replayableResponseItems.length === nativeOutputItems.length) {
+							chainState.lastResponseId = output.responseId;
+							chainState.lastResponseItems = replayableResponseItems;
+							chainState.canAppend = true;
+							// Only a successful CHAINED completion clears the stale counter — a
+							// full-context success must not mask categorical rejection.
+							if (sentPreviousResponseId) chainState.staleFailures = 0;
+						} else {
+							// No response id, or replay sanitization dropped an item the server
+							// still holds. Sanitization is 1:1-or-fewer, so either case makes the
+							// append baseline untrustworthy; next turn must replay in full.
+							chainState.canAppend = false;
+							chainState.lastResponseId = undefined;
+							chainState.lastResponseItems = undefined;
+						}
 					}
 				}
 			} else if (chainState) {

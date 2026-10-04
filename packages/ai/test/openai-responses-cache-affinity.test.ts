@@ -804,6 +804,8 @@ describe("openai-responses cache affinity", () => {
 	});
 
 	it("reapplies onPayload replacements on stateful stale-chain retry", async () => {
+		// Stateful chaining is scoped to the NInfer provider.
+		const statefulModel = { ...model, provider: "ninfer" } as Model<"openai-responses">;
 		const providerSessionState = new Map<string, ProviderSessionState>();
 		const requestBodies: Array<Record<string, unknown>> = [];
 		let payloadCall = 0;
@@ -864,7 +866,7 @@ describe("openai-responses cache affinity", () => {
 		});
 
 		const runContext = (context: Context) =>
-			streamOpenAIResponses(model, context, {
+			streamOpenAIResponses(statefulModel, context, {
 				apiKey: "test-key",
 				fetch: fetchMock,
 				onPayload: async payload => ({

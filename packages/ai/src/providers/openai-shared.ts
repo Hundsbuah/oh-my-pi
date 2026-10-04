@@ -36,6 +36,7 @@ import {
 import { NO_AUTH_SENTINEL } from "../auth-retry";
 import * as AIError from "../error";
 import { parseToolCallArguments, replayableToolCallArguments } from "../utils/tool-call-arguments";
+import type { NInferToolCallRecovery } from "../types";
 import {
 	type Api,
 	type AssistantMessage,
@@ -3083,6 +3084,63 @@ export function appendResponsesImageResult(
 	});
 }
 
+// NInfer's recovery extension is bounded upstream (8 names x 128 bytes); re-apply
+// the bounds defensively so a non-NInfer host cannot inject oversized metadata.
+const NINFER_RECOVERY_MAX_NAMES = 8;
+const NINFER_RECOVERY_MAX_NAME_LENGTH = 128;
+
+/**
+ * Extract NInfer's namespaced tool-call recovery diagnostic from a terminal
+ * Responses body (`ninfer.tool_call_recovery`). Present only when NInfer
+ * rejected a malformed tool-call region fail-closed and returned it as
+ * ordinary text. The wire object is validated field by field; anything that
+ * does not match the documented shape is dropped, so the agent loop never
+ * acts on malformed or non-NInfer metadata.
+ */
+export function extractNInferToolCallRecovery(
+	response: unknown,
+): NInferToolCallRecovery | undefined {
+	if (!response || typeof response !== "object") return undefined;
+	const extension = (response as Record<string, unknown>).ninfer;
+	if (!extension || typeof extension !== "object") return undefined;
+	const raw = (extension as Record<string, unknown>).tool_call_recovery;
+	if (!raw || typeof raw !== "object") return undefined;
+	const candidate = raw as Record<string, unknown>;
+	if (typeof candidate.retry_eligible !== "boolean") return undefined;
+	if (typeof candidate.fallback_reason !== "string" || candidate.fallback_reason.length === 0)
+		return undefined;
+	if (typeof candidate.ambiguity_cause !== "string") return undefined;
+	if (candidate.tool_name !== null && typeof candidate.tool_name !== "string") return undefined;
+	if (typeof candidate.parameter_count !== "number" || !Number.isFinite(candidate.parameter_count))
+		return undefined;
+	if (typeof candidate.parameter_names_truncated !== "boolean") return undefined;
+	if (!Array.isArray(candidate.parameter_names)) return undefined;
+	const parameterNames: string[] = [];
+	let boundApplied = false;
+	for (const name of candidate.parameter_names as unknown[]) {
+		if (typeof name !== "string" || name.length === 0) {
+			boundApplied = true;
+			continue;
+		}
+		if (parameterNames.length >= NINFER_RECOVERY_MAX_NAMES) {
+			boundApplied = true;
+			break;
+		}
+		if (name.length > NINFER_RECOVERY_MAX_NAME_LENGTH) boundApplied = true;
+		parameterNames.push(name.slice(0, NINFER_RECOVERY_MAX_NAME_LENGTH));
+	}
+	return {
+		retry_eligible: candidate.retry_eligible,
+		fallback_reason: candidate.fallback_reason,
+		ambiguity_cause: candidate.ambiguity_cause,
+		tool_name: candidate.tool_name,
+		parameter_names: parameterNames,
+		parameter_count: candidate.parameter_count,
+		parameter_names_truncated: candidate.parameter_names_truncated || boundApplied,
+	};
+}
+
+
 export async function processResponsesStream<TApi extends Api>(
 	openaiStream: AsyncIterable<ResponseStreamEvent>,
 	output: AssistantMessage,
@@ -3677,6 +3735,10 @@ export async function processResponsesStream<TApi extends Api>(
 				options?.requestServiceTier,
 			);
 			output.stopReason = mapOpenAIResponsesStopReason(response?.status);
+			// NInfer fail-closed tool-call rejection: a namespaced extension on the
+			// terminal body. Read verbatim (validated above) so the agent loop can
+			// run its bounded regeneration retry without scanning raw assistant text.
+			output.ninferToolCallRecovery = extractNInferToolCallRecovery(response);
 			if (response?.status === "failed" || response?.status === "cancelled") {
 				const error = response?.error ?? (response as any)?.status_details?.error;
 				const details = response?.incomplete_details;

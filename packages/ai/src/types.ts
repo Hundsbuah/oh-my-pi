@@ -1108,6 +1108,22 @@ export type AssistantRetryRecovery =
 			recovery: AssistantRetryRecoveryKind;
 			note: string;
 	  };
+/**
+ * NInfer's namespaced tool-call recovery diagnostic, mirrored verbatim from the
+ * OpenAI Responses terminal body's `ninfer.tool_call_recovery` extension. NInfer
+ * rejects a malformed tool-call region fail-closed and returns it as ordinary
+ * text; `retry_eligible` marks the parameter-conflict classes where a bounded
+ * regeneration retry is recommended. Never derived from raw assistant text.
+ */
+export interface NInferToolCallRecovery {
+	retry_eligible: boolean;
+	fallback_reason: string;
+	ambiguity_cause: string;
+	tool_name: string | null;
+	parameter_names: string[];
+	parameter_count: number;
+	parameter_names_truncated: boolean;
+}
 
 export interface ContextSnapshot {
 	promptTokens: number; // authoritative provider prompt/input tokens
@@ -1142,6 +1158,8 @@ export interface AssistantMessage {
 	credentialId?: number;
 	contextSnapshot?: ContextSnapshot;
 	retryRecovery?: AssistantRetryRecovery;
+	/** NInfer tool-call recovery diagnostic for a rejected (fail-closed) tool-call region; absent for other providers and for turns without a rejected marker. */
+	ninferToolCallRecovery?: NInferToolCallRecovery;
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
 	/**
 	 * Name of the upstream provider an aggregator routed this request to, as

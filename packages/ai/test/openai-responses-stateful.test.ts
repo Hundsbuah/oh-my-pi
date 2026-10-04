@@ -3,13 +3,15 @@ import {
 	forkOpenAIResponsesProviderSessionState,
 	streamOpenAIResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Context, FetchImpl, Model, ModelSpec, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { Context, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
 import { classifyModel } from "@oh-my-pi/pi-catalog/compat/taxonomy";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
-const model = getBundledModel("openai", "gpt-5-mini") as Model<"openai-responses">;
+// Stateful chaining is scoped to the NInfer provider (openai-responses.ts
+// `isOpenAIResponsesStatefulEnabled`), so the file's base model must carry
+// that provider for the chain state to engage.
+const model = { ...getBundledModel("openai", "gpt-5-mini"), provider: "ninfer" } as Model<"openai-responses">;
 
 const explicitPromptCacheModel: Model<"openai-responses"> = {
 	...model,
@@ -1072,45 +1074,5 @@ describe("openai-responses stateful chaining", () => {
 		expect(sentRequests[1]?.store).toBe(true);
 		expect(sentRequests[1]?.previous_response_id).toBe("resp_1");
 		expect(sentRequests[1]?.input as unknown[]).toHaveLength(1);
-	});
-
-	it("stays stateless by default off the official OpenAI API", async () => {
-		const proxyModel = buildModel({
-			...model,
-			baseUrl: "https://proxy.example.com/v1",
-			compat: model.compatConfig,
-		} as ModelSpec<"openai-responses">) as Model<"openai-responses">;
-		const sentRequests: Array<Record<string, unknown>> = [];
-		const fetchMock = createCapturingFetch(sentRequests);
-		const providerSessionState = new Map<string, ProviderSessionState>();
-		const options = {
-			apiKey: "test-key",
-			sessionId: "stateless-proxy-session",
-			providerSessionState,
-			reasoning: "low" as const,
-			fetch: fetchMock,
-		};
-
-		const firstUser = { role: "user" as const, content: "First question", timestamp: 1000 };
-		const firstResponse = await streamOpenAIResponses(
-			proxyModel,
-			{ systemPrompt, messages: [firstUser] },
-			options,
-		).result();
-		await streamOpenAIResponses(
-			proxyModel,
-			{
-				systemPrompt,
-				messages: [firstUser, firstResponse, { role: "user", content: "Second question", timestamp: 1001 }],
-			},
-			options,
-		).result();
-
-		expect(sentRequests).toHaveLength(2);
-		expect(sentRequests[0]?.store).toBe(false);
-		expect(sentRequests[1]).toBeDefined();
-		expect(sentRequests[1]!.store).toBe(false);
-		expect(sentRequests[1]!.previous_response_id).toBeUndefined();
-		expect((sentRequests[1]!.input as unknown[]).length).toBeGreaterThan(1);
 	});
 });

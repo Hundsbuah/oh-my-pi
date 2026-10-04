@@ -1233,6 +1233,10 @@ async function runLoopBody(
 		let harmonyTruncateResumeCount = 0;
 		let pausedTurnContinuations = 0;
 		let dsmlLeakNudges = 0;
+		// NInfer fail-closed tool-call rejection: at most one bounded regeneration
+		// retry per run (the rejected turn is discarded and re-sampled with a
+		// correction; a second rejection ends the run with a controlled error).
+		let parserRecoveryAttempts = 0;
 
 		// Soft tool requirement lifecycle (reminder then escalation; see SoftToolRequirement).
 		// The host-owned state survives only a gate stop between Agent.prompt calls.
@@ -1697,6 +1701,63 @@ async function runLoopBody(
 				if (toolCalls.length > 0) {
 					pausedTurnContinuations = 0;
 					dsmlLeakNudges = 0;
+				} else if (
+					!hasMoreToolCalls &&
+					toolCalls.length === 0 &&
+					message.stopReason === "stop" &&
+					message.provider === "ninfer" &&
+					message.ninferToolCallRecovery?.retry_eligible === true
+				) {
+					// NInfer rejected the tool call fail-closed and returned the raw
+					// markup as ordinary text (no toolCall block exists). The response
+					// itself succeeded, so only the diagnostic extension names the
+					// rejection. Regeneration is the only recovery: repair-and-execute
+					// would bypass the parser's fail-closed verdict.
+					const recovery = message.ninferToolCallRecovery!;
+					logger.debug("NInfer tool-call recovery diagnostic", {
+						fallbackReason: recovery.fallback_reason,
+						ambiguityCause: recovery.ambiguity_cause,
+						toolName: recovery.tool_name,
+						parameterNames: recovery.parameter_names,
+						attempt: parserRecoveryAttempts + 1,
+					});
+					const toolClause = recovery.tool_name !== null ? ` for tool \`${recovery.tool_name}\`` : "";
+					const paramClause =
+						recovery.parameter_names.length > 0
+							? `; offending parameter name(s): ${recovery.parameter_names.join(", ")}`
+							: "";
+					if (parserRecoveryAttempts < 1) {
+						parserRecoveryAttempts++;
+						// Discard the rejected turn from the executable history: it is the
+						// exact object streamAssistantResponse committed, so removal is by
+						// identity. The turn_end event below still records the wire turn.
+						const contextIndex = currentContext.messages.indexOf(message);
+						if (contextIndex !== -1) currentContext.messages.splice(contextIndex, 1);
+						const runIndex = newMessages.indexOf(message);
+						if (runIndex !== -1) newMessages.splice(runIndex, 1);
+						const correction = injectExecutionAdditionalContext(
+							currentContext,
+							newMessages,
+							stream,
+							`Your previous tool call was rejected by the server tool-call parser (cause: ${recovery.ambiguity_cause}${toolClause}${paramClause}); the rejected raw markup has been removed from the conversation. Regenerate the tool call using only the parameter names declared in the supplied tool schema. Do not repeat or repair the rejected markup.`,
+						);
+						if (correction) additionalMessages.push(correction);
+						hasMoreToolCalls = true;
+					} else {
+						// Second rejection: controlled failure, no further retry, no
+						// user-equivalent "continue" turn. The message stays in the
+						// history as the error turn; its diagnostic already rode the
+						// turn_end/agent_end events.
+						message.stopReason = "error";
+						message.errorMessage = `Tool call generation failed after one regeneration retry: the server tool-call parser rejected the call (cause: ${recovery.ambiguity_cause}${toolClause}${paramClause}). Use only the parameter names declared in the tool schemas; the rejected markup was not executed.`;
+						await emitTurnEnd(stream, currentContext, message, toolResults, config, signal, {
+							willContinue: false,
+						});
+						turnOpen = false;
+						stream.push(buildAgentEndEvent(newMessages, telemetry, stepCounter.count));
+						stream.end(newMessages);
+						return;
+					}
 				} else if (
 					!hasMoreToolCalls &&
 					message.stopReason === "stop" &&
