@@ -62,7 +62,9 @@ use crate::fs::{
 pub(crate) type Handle = OwnedHandle;
 
 /// See [`crate::fs::Fs::workers`] (unmeasured on Windows).
-pub(crate) const WORKERS: usize = 4;
+/// Local tuning: wide NTFS trees on many-core boxes gain from more concurrent
+/// listings; `parallelism()` still clamps by available parallelism.
+pub(crate) const WORKERS: usize = 32;
 
 const LIST_BUF: usize = 64 << 10;
 
