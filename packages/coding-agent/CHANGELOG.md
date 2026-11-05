@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added per-role skill visibility control for subagents via agent frontmatter: `skills` (allowlist globs; `"none"`/`[]` lists none), `hideSkills` (denylist globs, highest precedence), and `unhideSkills` (re-exposes skills whose `SKILL.md` sets `hide: true`) — see [#4570](https://github.com/can1357/oh-my-pi/issues/4570). Controls the rendered `<skills>` block only; hidden skills remain loadable via `skill://<name>` and `/skill:<name>`
+- Added `compat.includeEncryptedReasoning` to `models.yml` provider/model compat to replay encrypted reasoning content on endpoints that store it
 - Added `skills.manualSkills` glob patterns to keep skills available manually while hiding them from the model catalog, without editing their `SKILL.md` files ([#18114](https://github.com/can1357/oh-my-pi/pull/18114) by [@Shadorain](https://github.com/Shadorain))
 - Added Keenable as a web search engine (`web/keenable`). It uses `KEENABLE_API_KEY` or a stored `keenable` credential when present; an explicit selection without a key uses Keenable's keyless public endpoint ([#17953](https://github.com/can1357/oh-my-pi/pull/17953) by [@KGKallasmaa](https://github.com/KGKallasmaa))
 - `web_search` results now list in `details.failures` each provider that failed before another answered, or every provider when all failed, with its reason and status code, so session transcripts show how often each one fails or refuses ([#18124](https://github.com/can1357/oh-my-pi/pull/18124) by [@will-bogusz](https://github.com/will-bogusz))
@@ -31,6 +33,8 @@
 
 ### Fixed
 
+- Compaction handoffs on self-hosted Responses servers (e.g. Infernix) no longer replay the full conversation prefix: the handoff request sizes its own output budget, tolerates window-fitted output-cap drift, and compares forked image items with the Responses API's default detail spelling, so `previous_response_id` append gating passes and the handoff prefills only the appended delta
+- A `media_budget_exceeded` rejection from a self-hosted Responses server now shows the payload-rejection notice with the HTTP status and concrete remedies instead of an opaque turn failure
 - Agents using `computer` from Eval now `zoom` for a legible close-up instead of cropping the saved screenshot file, which is downscaled to the capture size on large or Retina windows ([#18158](https://github.com/can1357/oh-my-pi/pull/18158) by [@will-bogusz](https://github.com/will-bogusz))
 - Python eval `@tool` definitions with type annotations now register on Python 3.9 instead of failing with `module 'types' has no attribute 'UnionType'` ([#18143](https://github.com/can1357/oh-my-pi/pull/18143) by [@Winston-Hsiao](https://github.com/Winston-Hsiao))
 - `read` of an SEC EDGAR filing document or filing folder (`sec.gov/Archives/edgar/data/<cik>/<accession>/…`) returns that document instead of the company's profile and recent filings list ([#18150](https://github.com/can1357/oh-my-pi/pull/18150) by [@will-bogusz](https://github.com/will-bogusz))

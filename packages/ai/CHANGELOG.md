@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `compat.includeEncryptedReasoning` for OpenAI Responses endpoints: requests then ask for `reasoning.encrypted_content` and replay stored reasoning items, so self-hosted servers keep reasoning continuity across chained turns
 - Added opt-in standard Responses WebSockets for catalog-supported models, with incremental turns and session-scoped HTTP/SSE fallback; OMP enables them through settings ([#17354](https://github.com/can1357/oh-my-pi/pull/17354) by [@TatsukiMeng](https://github.com/TatsukiMeng))
 - `AuthStorage` can be constructed over an `AuthStorageBackend` (its namespaces plus `setAccountPolicies`/`replaceStore`/`close`) instead of a credential store, so another thread's instance can serve every call
 - Anthropic sessions on the official API now use message threads (`message-threads-2026-08-12`, as Claude Code does): after the first turn each request sends only the new messages, cutting time to first token in long conversations; a refused or expired thread replays the full conversation automatically. `statefulResponses: false` or `PI_ANTHROPIC_MESSAGE_THREADS=0` turns it off, `PI_ANTHROPIC_MESSAGE_THREADS=1` opts other endpoints in
@@ -13,6 +14,9 @@
 
 ### Fixed
 
+- Fixed OpenAI Responses chain recovery on self-hosted endpoints (e.g. Infernix): a `404 response_not_found` rejection of `previous_response_id` now degrades to a full-context replay retry within the same request instead of failing the turn or the compaction handoff
+- Fixed Responses chained turns breaking to a full replay whenever the window-fitted `max_output_tokens` re-shrank between turns: the append gate now treats the per-request output cap as exempt, on live and forked chains alike
+- Fixed `media_budget_exceeded` rejections from self-hosted Responses servers being surfaced as an opaque provider error instead of a media payload rejection with retry guidance
 - Fixed account switching stopping after rate-limited accounts when model discovery had not seen every stored account; other eligible accounts are now tried before blocked fallbacks
 - Fixed OpenRouter Decisions judges ignoring a model's `compat.openRouterRouting` and `compat.extraBody` (including `@provider` pins): judgment requests now carry them, so provider pins, `allow_fallbacks: false`, and `data_collection: "deny"` reach OpenRouter ([#18140](https://github.com/can1357/oh-my-pi/issues/18140))
 - OAuth broker validation now checks optional residency, inference-region, and selected-organization metadata in uploaded credentials and remote snapshots
