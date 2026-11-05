@@ -411,7 +411,11 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	// does a malformed one that resolves to no usable name (a blank CSV, an
 	// array of blanks) — silently listing nothing is the one reading nobody
 	// asks for.
-	const rawSkills = frontmatter.skills === "none" ? [] : parseArrayOrCSV(frontmatter.skills, { keepEmpty: true });
+	const rawSkills =
+		frontmatter.skills === "none"
+			? []
+			: (parseArrayOrCSV(frontmatter.skills) ??
+				(Array.isArray(frontmatter.skills) && frontmatter.skills.length === 0 ? [] : undefined));
 	const namedSkills = rawSkills?.map(s => s.trim()).filter(Boolean) ?? [];
 	const skills =
 		rawSkills !== undefined && (rawSkills.length === 0 || namedSkills.length > 0) ? namedSkills : undefined;
