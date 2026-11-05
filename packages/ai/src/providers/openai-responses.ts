@@ -604,6 +604,7 @@ export function forkOpenAIResponsesProviderSessionState(
 		chainCopies.push([
 			targetKey,
 			{
+				sessionId: targetRoutingSessionId,
 				lastParams: structuredCloneJSON(sourceChain.lastParams),
 				lastPromptCacheBreakpointPolicy: sourceChain.lastPromptCacheBreakpointPolicy,
 				lastResponseId: sourceChain.lastResponseId,
@@ -617,7 +618,10 @@ export function forkOpenAIResponsesProviderSessionState(
 	}
 	if (chainCopies.length === 0) return undefined;
 
-	const targetProviderState = createOpenAIResponsesProviderSessionState();
+	// `create` reads `model.compat` only to seed `nativeHistoryReplayWarmed`,
+	// which the fork overwrites from the source state below. Callers pass a
+	// real registry model whose resolved Responses compat is present.
+	const targetProviderState = createOpenAIResponsesProviderSessionState(model as Model<"openai-responses">);
 	targetProviderState.nativeHistoryReplayWarmed = sourceProviderState.nativeHistoryReplayWarmed;
 	targetProviderState.strictTools.disabledModelScopes = new Set(sourceProviderState.strictTools.disabledModelScopes);
 	targetProviderState.reasoningEffortFallbacks = new Map(sourceProviderState.reasoningEffortFallbacks);
