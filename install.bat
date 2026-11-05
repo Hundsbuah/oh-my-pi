@@ -60,6 +60,7 @@ set "EXIT_BUN_INSTALL=11"
 set "EXIT_NATIVE_BUILD=12"
 set "EXIT_CARGO=13"
 set "EXIT_NATIVE_CLEAN=14"
+set "EXIT_MSVC_ENV=15"
 set "EXIT_TYPECHECK=20"
 set "EXIT_BUILD=30"
 set "EXIT_BUILD_ARTIFACT=31"
@@ -130,6 +131,69 @@ if errorlevel 1 (
     echo [FEHLER] cargo wurde gefunden, konnte aber nicht erfolgreich gestartet werden.
     exit /b %EXIT_CARGO%
 )
+
+rem ============================================================
+rem MSVC/Windows-SDK-Build-Umgebung fuer Rust-Linking (ucrt.lib)
+rem
+rem rustc findet link.exe zwar via vswhere, aber die SDK-Lib-/Include-Pfade
+rem (ucrt.lib, um.lib) kommen nur aus den VsDevCmd-Variablen. Ohne sie
+rem scheitert jedes Rust-Build mit LNK1104 auf ucrt.lib. In einer
+rem Developer-Shell ist LIB bereits gesetzt - dann wird uebersprungen.
+rem ============================================================
+
+set "VS_INSTALLER_DIR=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer"
+
+echo %LIB% | findstr /i /c:"\ucrt" >nul 2>&1
+if not errorlevel 1 (
+    echo MSVC-Build-Umgebung erkannt - VsDevCmd wird uebersprungen.
+    goto :msvc_env_done
+)
+
+if not exist "%VS_INSTALLER_DIR%\vswhere.exe" (
+    echo [FEHLER] vswhere.exe wurde nicht gefunden:
+    echo   "%VS_INSTALLER_DIR%\vswhere.exe"
+    echo Alternative: install.bat in einer "Developer PowerShell fuer VS" starten.
+    exit /b %EXIT_MSVC_ENV%
+)
+
+rem VsDevCmd.bat interniert vswhere - das Installer-Verzeichnis muss auf PATH liegen.
+set "PATH=%VS_INSTALLER_DIR%;%PATH%"
+
+rem Volle Pfad-Angabe mit usebackq ist keine Option: das "(x86)" im
+rem Installer-Pfad ueberlebt den cmd /c-Rescan der For-Kommandozeichenkette
+rem nicht. vswhere liegt bereits ueber PATH (Zeile oben), daher Simple-Form.
+set "VS_INSTALL="
+for /f "delims=" %%I in ('vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath') do set "VS_INSTALL=%%I"
+
+if not defined VS_INSTALL (
+    echo [FEHLER] Keine Visual-Studio-Installation mit VC++-x64-Build-Tools gefunden.
+    echo Alternative: install.bat in einer "Developer PowerShell fuer VS" starten.
+    exit /b %EXIT_MSVC_ENV%
+)
+
+set "VS_DEVCMD=%VS_INSTALL%\Common7\Tools\VsDevCmd.bat"
+if not exist "%VS_DEVCMD%" (
+    echo [FEHLER] VsDevCmd.bat wurde nicht gefunden:
+    echo   "%VS_DEVCMD%"
+    exit /b %EXIT_MSVC_ENV%
+)
+
+echo MSVC-Developer-Umgebung wird geladen...
+echo   %VS_DEVCMD%
+call "%VS_DEVCMD%" -arch=x64 -host_arch=x64 -no_logo
+if errorlevel 1 (
+    echo [FEHLER] VsDevCmd.bat wurde mit Exit-Code %ERRORLEVEL% beendet.
+    exit /b %EXIT_MSVC_ENV%
+)
+
+rem Nachweis: der Linker muss die UCRT-Bibliotheken jetzt zuverlaessig finden.
+echo %LIB% | findstr /i /c:"\ucrt" >nul 2>&1
+if errorlevel 1 (
+    echo [FEHLER] Nach VsDevCmd enthaelt LIB kein ucrt-Verzeichnis.
+    echo Das Rust-Build wuerde weiterhin mit LNK1104 auf ucrt.lib scheitern.
+    exit /b %EXIT_MSVC_ENV%
+)
+:msvc_env_done
 
 where.exe pwsh.exe >nul 2>&1
 if not errorlevel 1 (
@@ -250,6 +314,20 @@ set "CMD_RC=%ERRORLEVEL%"
 if not "%CMD_RC%"=="0" (
     echo.
     echo [FEHLER] Die temporaere +local-git Anzeige konnte nicht sicher vorbereitet werden.
+    popd
+    exit /b %EXIT_DISPLAY_PATCH%
+)
+
+rem The display patch lengthens the run() call past oxfmt's line width, so
+rem reformat cli.ts before check:types runs oxfmt --check on it. Restore is
+rem byte-exact from the backup and unaffected by this rewrite.
+echo Patched cli.ts mit oxfmt normalisieren...
+call bun x oxfmt "%CLI_FILE%"
+set "CMD_RC=%ERRORLEVEL%"
+if not "%CMD_RC%"=="0" (
+    echo.
+    echo [FEHLER] oxfmt konnte das gepatchte cli.ts nicht formatieren.
+    call :RestoreDisplaySource
     popd
     exit /b %EXIT_DISPLAY_PATCH%
 )
